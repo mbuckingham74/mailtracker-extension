@@ -1,0 +1,68 @@
+<!-- Open this in a browser to generate icon PNGs -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Mailtrack Icons</title>
+</head>
+<body>
+  <h1>Right-click each canvas and save as PNG</h1>
+  <p>Save as: icon16.png, icon48.png, icon128.png</p>
+  
+  <h3>16x16</h3>
+  <canvas id="c16" width="16" height="16"></canvas>
+  
+  <h3>48x48</h3>
+  <canvas id="c48" width="48" height="48"></canvas>
+  
+  <h3>128x128</h3>
+  <canvas id="c128" width="128" height="128"></canvas>
+  
+  <script>
+    function drawIcon(canvas) {
+      const ctx = canvas.getContext('2d');
+      const size = canvas.width;
+      
+      // Background
+      ctx.fillStyle = '#3498db';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, size, size, size * 0.15);
+      ctx.fill();
+      
+      // Envelope
+      ctx.fillStyle = 'white';
+      const margin = size * 0.2;
+      const w = size - margin * 2;
+      const h = w * 0.7;
+      const y = (size - h) / 2;
+      
+      ctx.beginPath();
+      ctx.roundRect(margin, y, w, h, size * 0.05);
+      ctx.fill();
+      
+      // Envelope flap
+      ctx.fillStyle = '#2c3e50';
+      ctx.beginPath();
+      ctx.moveTo(margin, y);
+      ctx.lineTo(size / 2, y + h * 0.5);
+      ctx.lineTo(size - margin, y);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Checkmark
+      ctx.strokeStyle = '#27ae60';
+      ctx.lineWidth = size * 0.08;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(size * 0.3, size * 0.55);
+      ctx.lineTo(size * 0.45, size * 0.7);
+      ctx.lineTo(size * 0.7, size * 0.4);
+      ctx.stroke();
+    }
+    
+    drawIcon(document.getElementById('c16'));
+    drawIcon(document.getElementById('c48'));
+    drawIcon(document.getElementById('c128'));
+  </script>
+</body>
+</html>

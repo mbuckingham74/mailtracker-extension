@@ -1,0 +1,14 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Packed extension
+*.crx
+*.pem
+*.zip

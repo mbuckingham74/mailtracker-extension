@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Mailtrack</h1>
+
+    <div class="status" id="status">
+      <span class="status-dot"></span>
+      <span class="status-text">Checking...</span>
+    </div>
+
+    <div class="section">
+      <label for="apiKey">API Key</label>
+      <input type="password" id="apiKey" placeholder="Enter your API key">
+    </div>
+
+    <div class="section">
+      <label class="toggle">
+        <input type="checkbox" id="enabled" checked>
+        <span class="slider"></span>
+        <span class="label">Auto-insert tracking pixels</span>
+      </label>
+    </div>
+
+    <div class="section">
+      <label class="toggle">
+        <input type="checkbox" id="showNotification" checked>
+        <span class="slider"></span>
+        <span class="label">Show notification when inserted</span>
+      </label>
+    </div>
+
+    <button id="saveBtn" class="btn-primary">Save Settings</button>
+
+    <div class="footer">
+      <a href="https://mailtrack.tachyonfuture.com" target="_blank">Open Dashboard</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
