@@ -46,18 +46,75 @@ async function createTrackingPixel(recipient, subject) {
   }
 }
 
+// Extract recipient emails from Gmail's compose window
+function extractRecipients(composeWindow) {
+  const recipients = [];
+
+  // Method 1: Look for email chips/pills (Gmail shows recipients as chips)
+  // These are typically spans or divs with email attribute or data-hovercard-id
+  const emailChips = composeWindow.querySelectorAll(
+    '[email], [data-hovercard-id*="@"], [data-email]'
+  );
+  emailChips.forEach(chip => {
+    const email = chip.getAttribute('email') ||
+                  chip.getAttribute('data-email') ||
+                  chip.getAttribute('data-hovercard-id');
+    if (email && email.includes('@')) {
+      recipients.push(email);
+    }
+  });
+
+  // Method 2: Look for the "To" row and find emails within it
+  if (recipients.length === 0) {
+    const toRow = composeWindow.querySelector('[aria-label*="To"]')?.closest('tr, div[class]') ||
+                  composeWindow.querySelector('[name="to"]')?.closest('tr, div[class]');
+    if (toRow) {
+      // Look for any element containing an email pattern
+      const allText = toRow.innerText;
+      const emailMatch = allText.match(/[\w.-]+@[\w.-]+\.\w+/g);
+      if (emailMatch) {
+        recipients.push(...emailMatch);
+      }
+    }
+  }
+
+  // Method 3: Look for spans with specific Gmail classes that contain email addresses
+  if (recipients.length === 0) {
+    const spans = composeWindow.querySelectorAll('span[email], div[email], span.vN, span[data-hovercard-owner-id]');
+    spans.forEach(span => {
+      const email = span.getAttribute('email') || span.textContent;
+      if (email && email.includes('@')) {
+        // Extract just the email if there's extra text
+        const match = email.match(/[\w.-]+@[\w.-]+\.\w+/);
+        if (match) recipients.push(match[0]);
+      }
+    });
+  }
+
+  // Method 4: Check the input field itself (for when user is still typing)
+  if (recipients.length === 0) {
+    const toInput = composeWindow.querySelector('input[name="to"]') ||
+                    composeWindow.querySelector('input[aria-label="To recipients"]') ||
+                    composeWindow.querySelector('input[aria-label="To"]') ||
+                    composeWindow.querySelector('[name="to"]');
+    if (toInput?.value && toInput.value.includes('@')) {
+      const match = toInput.value.match(/[\w.-]+@[\w.-]+\.\w+/);
+      if (match) recipients.push(match[0]);
+    }
+  }
+
+  // Return unique recipients joined by comma, or empty string
+  return [...new Set(recipients)].join(', ');
+}
+
 // Insert tracking pixel into compose window
 async function insertTrackingPixel(composeBody, composeWindow) {
   // Get recipient and subject from the compose window
-  const recipientInput = composeWindow.querySelector('input[name="to"]') ||
-                         composeWindow.querySelector('input[aria-label="To recipients"]') ||
-                         composeWindow.querySelector('input[aria-label="To"]') ||
-                         composeWindow.querySelector('[name="to"]');
+  const recipient = extractRecipients(composeWindow);
 
   const subjectInput = composeWindow.querySelector('input[name="subjectbox"]') ||
                        composeWindow.querySelector('input[aria-label="Subject"]');
 
-  const recipient = recipientInput?.value || '';
   const subject = subjectInput?.value || '';
 
   console.log('Mailtrack: Inserting pixel for:', recipient, subject);
