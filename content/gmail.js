@@ -69,71 +69,54 @@ function hasTrackingPixel(element) {
 function extractRecipients(composeWindow) {
   const recipients = new Set();
 
-  // Gmail uses specific input elements for recipients
-  // The actual chips are inside elements with role="option" or specific Gmail classes
-  // We look for the input row containers specifically
+  // Strategy: Find elements with [email] attribute that are INSIDE the header area
+  // but NOT inside dropdown/suggestion containers
 
-  // Find recipient rows by looking for the input elements
-  const toInput = composeWindow.querySelector('input[name="to"]');
-  const ccInput = composeWindow.querySelector('input[name="cc"]');
-  const bccInput = composeWindow.querySelector('input[name="bcc"]');
+  // The compose header contains To/CC/BCC rows
+  // Suggestions appear in elements with role="listbox" or similar
 
-  const inputs = [
-    { input: toInput, name: 'To' },
-    { input: ccInput, name: 'CC' },
-    { input: bccInput, name: 'BCC' }
-  ].filter(x => x.input);
+  // First, find all elements with [email] attribute
+  const allEmailElements = composeWindow.querySelectorAll('[email]');
+  console.log('Mailtrack: Found', allEmailElements.length, 'elements with [email] attribute');
 
-  console.log('Mailtrack: Found', inputs.length, 'recipient inputs');
+  allEmailElements.forEach(el => {
+    const email = el.getAttribute('email');
+    if (!email || !email.includes('@')) return;
 
-  inputs.forEach(({ input, name }) => {
-    // The recipient chips are siblings of the input, in the same row
-    // Go up to the row container and look for chips there
-    const row = input.closest('[role="group"]') || input.closest('tr') || input.parentElement?.parentElement;
-    if (!row) {
-      console.log(`Mailtrack: ${name} - Could not find row container`);
+    // Exclude if inside a listbox (suggestions dropdown)
+    if (el.closest('[role="listbox"]')) {
+      console.log('Mailtrack: Skipping (in listbox):', email);
       return;
     }
 
-    // Look for elements with [email] attribute - these are the actual selected chips
-    // Gmail chips have a specific structure with email attribute
-    row.querySelectorAll('[email]').forEach(chip => {
-      const email = chip.getAttribute('email');
-      if (email && email.includes('@')) {
-        console.log(`Mailtrack: ${name} - Found chip:`, email);
-        recipients.add(email);
-      }
-    });
+    // Exclude if inside autocomplete suggestions
+    if (el.closest('[role="presentation"]') && !el.closest('[role="option"]')) {
+      console.log('Mailtrack: Skipping (in presentation):', email);
+      return;
+    }
 
-    // Also check data-hovercard-id on elements that look like chips (not suggestions)
-    row.querySelectorAll('[data-hovercard-id]').forEach(el => {
-      // Only include if it looks like a selected chip (has certain styling/role)
-      const isChip = el.closest('[role="option"]') || el.closest('[data-name]') || el.getAttribute('tabindex');
-      if (isChip) {
-        const id = el.getAttribute('data-hovercard-id');
-        if (id && id.includes('@')) {
-          console.log(`Mailtrack: ${name} - Found hovercard chip:`, id);
-          recipients.add(id);
-        }
-      }
-    });
-  });
+    // Check if this looks like a selected chip (has specific Gmail chip classes/structure)
+    // Selected chips typically have data-name attribute or are inside a specific structure
+    const isChip = el.hasAttribute('data-name') ||
+                   el.closest('[data-name]') ||
+                   el.closest('.afV') ||  // Gmail chip container class
+                   el.getAttribute('tabindex') === '0';
 
-  // Fallback: if we found nothing, try the broader search but be careful
-  if (recipients.size === 0) {
-    console.log('Mailtrack: No recipients from inputs, trying fallback');
-    const toContainer = composeWindow.querySelector('[aria-label="To recipients"]');
-    if (toContainer) {
-      // Only look at direct [email] attributes, not nested suggestions
-      toContainer.querySelectorAll(':scope > * [email], :scope > [email]').forEach(chip => {
-        const email = chip.getAttribute('email');
-        if (email && email.includes('@')) {
-          console.log('Mailtrack: Fallback - Found:', email);
+    if (isChip) {
+      console.log('Mailtrack: Found recipient chip:', email);
+      recipients.add(email);
+    } else {
+      // Also accept if it's in a row that contains "To", "Cc", or "Bcc" text
+      const row = el.closest('tr') || el.closest('[role="group"]') || el.parentElement?.parentElement?.parentElement;
+      if (row) {
+        const rowText = row.textContent?.toLowerCase() || '';
+        if (rowText.includes('to') || rowText.includes('cc') || rowText.includes('bcc')) {
+          console.log('Mailtrack: Found recipient in header row:', email);
           recipients.add(email);
         }
-      });
+      }
     }
-  }
+  });
 
   const result = [...recipients];
   console.log('Mailtrack: Total recipients found:', result);
