@@ -211,6 +211,28 @@ async function processComposeBody(composeBody) {
                         composeBody.closest('form') ||
                         composeBody.parentElement?.parentElement?.parentElement;
 
+  // Track if pixel has been prepared for this compose window
+  let pixelPrepared = false;
+  let currentTrack = null;
+
+  // Function to prepare/update pixel with current recipient/subject
+  const preparePixelNow = async () => {
+    const recipients = extractRecipients(composeWindow);
+    const subject = extractSubject(composeWindow);
+    const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+
+    // Only create new track if we don't have one, or if recipient/subject changed significantly
+    if (!currentTrack) {
+      console.log('Mailtrack: Preparing pixel for:', recipient, subject);
+      currentTrack = await prepareTrackingPixel(composeBody, composeWindow);
+      if (currentTrack) {
+        pixelPrepared = true;
+        console.log('Mailtrack: Pixel prepared and sent to XHR interceptor:', currentTrack.id);
+      }
+    }
+    return currentTrack;
+  };
+
   // Find and intercept the send button
   const findAndInterceptSendButton = () => {
     const sendButton = composeWindow?.querySelector('[aria-label*="Send"]') ||
@@ -222,24 +244,43 @@ async function processComposeBody(composeBody) {
       console.log('Mailtrack: Intercepting send button');
       showInsertedBadge(composeWindow, true);
 
-      // Intercept mousedown (before click) to prepare pixel for XHR injection
+      // Intercept mousedown (before click) - BLOCK until pixel is ready
       sendButton.addEventListener('mousedown', async (e) => {
-        console.log('Mailtrack: Intercepted send, preparing pixel for XHR injection...');
+        console.log('Mailtrack: Send button clicked, ensuring pixel is ready...');
 
-        // Don't prevent default - let Gmail send normally
-        // The XHR interceptor will inject the pixel at the network level
+        // CRITICAL: Stop the event and prepare pixel synchronously
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
 
-        // Prepare the tracking pixel (creates record and sends to XHR interceptor)
-        const track = await prepareTrackingPixel(composeBody, composeWindow);
-
-        if (track) {
-          console.log('Mailtrack: Pixel prepared:', track.id);
-          console.log('Mailtrack: XHR interceptor will inject pixel into outgoing request');
+        // Prepare the tracking pixel if not already done
+        if (!pixelPrepared) {
+          await preparePixelNow();
         } else {
-          console.error('Mailtrack: Failed to prepare pixel');
+          // Re-send to interceptor in case it was cleared
+          if (currentTrack) {
+            const recipients = extractRecipients(composeWindow);
+            const subject = extractSubject(composeWindow);
+            const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+            sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
+            console.log('Mailtrack: Re-sent pixel to interceptor:', currentTrack.id);
+          }
         }
 
-      }, { capture: true });
+        // Small delay to ensure XHR interceptor has the pixel
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        console.log('Mailtrack: Pixel ready, triggering actual send...');
+
+        // Now trigger the actual send
+        const clickEvent = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        });
+        sendButton.dispatchEvent(clickEvent);
+
+      }, { capture: true, once: true });
     }
   };
 
