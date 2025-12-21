@@ -167,12 +167,61 @@ async function processComposeBody(composeBody) {
                         composeBody.closest('form') ||
                         composeBody.parentElement?.parentElement?.parentElement;
 
-  // Insert tracking pixel immediately
-  // Small delay to let Gmail finish initializing the compose area
-  setTimeout(async () => {
-    const success = await insertTrackingPixel(composeBody);
-    showInsertedBadge(composeWindow, success);
-  }, 500);
+  // Find and intercept the send button instead of inserting immediately
+  // This avoids disrupting the user's typing
+  const findAndInterceptSendButton = () => {
+    const sendButton = composeWindow?.querySelector('[aria-label*="Send"]') ||
+                       composeWindow?.querySelector('[data-tooltip*="Send"]') ||
+                       composeWindow?.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
+
+    if (sendButton && !sendButton.dataset.mailtrackIntercepted) {
+      sendButton.dataset.mailtrackIntercepted = 'true';
+      console.log('Mailtrack: Intercepting send button');
+      showInsertedBadge(composeWindow, true);
+
+      // Intercept mousedown (before click) to insert pixel
+      sendButton.addEventListener('mousedown', async (e) => {
+        // Check if pixel already inserted
+        if (hasTrackingPixel(composeBody)) {
+          console.log('Mailtrack: Pixel already exists, allowing send');
+          return;
+        }
+
+        console.log('Mailtrack: Intercepted send, inserting pixel...');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        // Insert pixel now
+        const success = await insertTrackingPixel(composeBody);
+        console.log('Mailtrack: Pixel insertion result:', success);
+
+        // Trigger send after brief delay
+        setTimeout(() => {
+          const clickEvent = new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          });
+          sendButton.dispatchEvent(clickEvent);
+        }, 100);
+
+      }, { capture: true, once: true });
+    }
+  };
+
+  // Try to find send button now and watch for it
+  findAndInterceptSendButton();
+
+  const buttonObserver = new MutationObserver(() => {
+    findAndInterceptSendButton();
+  });
+  if (composeWindow) {
+    buttonObserver.observe(composeWindow, { childList: true, subtree: true });
+  }
+
+  // Clean up observer after 30 seconds
+  setTimeout(() => buttonObserver.disconnect(), 30000);
 }
 
 // Main observer for compose windows
