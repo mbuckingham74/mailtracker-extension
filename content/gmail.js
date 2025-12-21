@@ -142,10 +142,23 @@ async function insertTrackingPixels(composeBody, composeWindow) {
 
     if (track) {
       // Create the tracking pixel element
-      const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:none" alt="" data-mailtrack-id="${track.id}" data-mailtrack-recipient="${recipient}">`;
+      // IMPORTANT: We use a data attribute for the real URL to prevent the browser
+      // from loading the image during composition. The src is set to a tiny
+      // transparent data URI. When Gmail serializes the email, we intercept and
+      // swap the src before sending.
+      const pixelImg = document.createElement('img');
+      pixelImg.width = 1;
+      pixelImg.height = 1;
+      pixelImg.style.display = 'none';
+      pixelImg.alt = '';
+      pixelImg.dataset.mailtrackId = track.id;
+      pixelImg.dataset.mailtrackRecipient = recipient;
+      pixelImg.dataset.mailtrackSrc = track.pixel_url; // Store real URL here
+      // Use a tiny transparent GIF data URI as placeholder (won't trigger server request)
+      pixelImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
       // Insert at the end of the email body
-      composeBody.insertAdjacentHTML('beforeend', pixelHtml);
+      composeBody.appendChild(pixelImg);
 
       console.log('Mailtrack: Inserted tracking pixel for', recipient || '(unknown)', track.id);
       successCount++;
@@ -158,6 +171,21 @@ async function insertTrackingPixels(composeBody, composeWindow) {
 // Check if a compose body has a tracking pixel
 function hasTrackingPixel(element) {
   return element.querySelector('img[data-mailtrack-id]') !== null;
+}
+
+// Activate tracking pixels by swapping data-mailtrack-src to src
+// This must be called right before Gmail sends the email
+function activateTrackingPixels(composeBody) {
+  const pixels = composeBody.querySelectorAll('img[data-mailtrack-src]');
+  pixels.forEach(pixel => {
+    const realSrc = pixel.dataset.mailtrackSrc;
+    if (realSrc) {
+      pixel.src = realSrc;
+      delete pixel.dataset.mailtrackSrc; // Clean up the data attribute
+      console.log('Mailtrack: Activated pixel', pixel.dataset.mailtrackId);
+    }
+  });
+  return pixels.length;
 }
 
 // Show notification badge
@@ -215,23 +243,29 @@ async function processComposeBody(composeBody) {
       console.log('Mailtrack: Intercepting send button');
 
       sendButton.addEventListener('mousedown', async (e) => {
-        if (hasTrackingPixel(composeBody)) {
-          console.log('Mailtrack: Pixel already inserted, allowing send');
-          return; // Already has pixel, let it send
+        // Check if pixels exist but haven't been activated yet
+        const hasPixels = hasTrackingPixel(composeBody);
+        const hasInactivePixels = composeBody.querySelector('img[data-mailtrack-src]') !== null;
+
+        if (hasPixels && !hasInactivePixels) {
+          console.log('Mailtrack: Pixels already activated, allowing send');
+          return; // Already activated, let it send
         }
 
-        console.log('Mailtrack: Intercepted send, inserting pixel...');
+        console.log('Mailtrack: Intercepted send...');
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        const success = await insertTrackingPixels(composeBody, composeWindow);
-
-        if (success) {
-          console.log('Mailtrack: Pixel inserted, triggering send');
-        } else {
-          console.log('Mailtrack: Failed to insert pixel, sending anyway');
+        // Insert pixels if not present
+        if (!hasPixels) {
+          console.log('Mailtrack: Inserting pixels...');
+          await insertTrackingPixels(composeBody, composeWindow);
         }
+
+        // Activate pixels (swap data-mailtrack-src to src) right before sending
+        const activatedCount = activateTrackingPixels(composeBody);
+        console.log('Mailtrack: Activated', activatedCount, 'pixel(s), triggering send');
 
         // Trigger the send after a brief delay
         setTimeout(() => {
