@@ -1,13 +1,15 @@
 # Mailtrack Chrome Extension
 
-A Chrome extension that automatically inserts tracking pixels into Gmail compose windows.
+A Chrome extension that automatically inserts tracking pixels into Gmail compose windows and notifies you when emails are opened.
 
 ## Features
 
 - Automatically inserts tracking pixels when you send emails
+- **Desktop notifications** when emails are opened (polls every 2 minutes)
 - Manual insert button in compose toolbar
 - Visual indicator when tracking is enabled
 - Syncs settings across Chrome browsers
+- Filters out proxy opens (Apple Mail Privacy Protection, Google Image Proxy)
 
 ## Installation (Developer Mode)
 
@@ -26,7 +28,8 @@ Since this is a personal extension, you'll load it unpacked:
 
 3. **Configure**:
    - Click the extension icon in Chrome toolbar
-   - Enter your API key: `4gPuf7qyuHJMUtOQAUTOeI4RL3TfzXrwRrn/+Fte9yM=`
+   - Enter your API key
+   - Toggle "Show Notifications" to enable desktop alerts
    - Click "Save Settings"
 
 ## How It Works
@@ -74,6 +77,7 @@ The extension connects to:
 - **API Base**: `https://mailtrack.tachyonfuture.com`
 - **Create Track**: `POST /api/tracks`
 - **Check Stats**: `GET /api/stats`
+- **Recent Opens**: `GET /api/opens/recent?since={timestamp}` (for notifications)
 
 All requests include the `X-API-Key` header.
 
@@ -91,6 +95,12 @@ All requests include the `X-API-Key` header.
 ### Tracking pixel not inserted
 - Look for the green "✓ Tracking" badge in the compose toolbar
 - Check the browser console for errors (F12 → Console)
+
+### Not receiving notifications
+- Make sure "Show Notifications" is enabled in extension settings
+- Check that Chrome has permission to show notifications (System Preferences → Notifications → Chrome)
+- Notifications only appear for "real" opens (proxy opens from Apple/Google are filtered out)
+- Notifications poll every 2 minutes, so there may be a short delay
 
 ## Development
 

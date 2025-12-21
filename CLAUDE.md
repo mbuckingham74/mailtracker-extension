@@ -1,6 +1,6 @@
 # Mailtrack Chrome Extension
 
-Chrome extension that automatically inserts tracking pixels into Gmail compose windows.
+Chrome extension that automatically inserts tracking pixels into Gmail compose windows and shows desktop notifications when emails are opened.
 
 ## Related Repository
 
@@ -11,31 +11,40 @@ See the CLAUDE.md in the mailtracker repo for comprehensive documentation of:
 - API endpoints and authentication
 - Database schema
 - Full architecture overview
+- Notification system details
 
 ## Quick Reference
 
 - **API Base**: https://mailtrack.tachyonfuture.com
-- **API Key**: `4gPuf7qyuHJMUtOQAUTOeI4RL3TfzXrwRrn/+Fte9yM=`
+- **API Key**: `ldENqwQVrLtf2pzBSpAtPdEqaF+JkVuhFXYfAlBWthE=`
 
 ## Extension Structure
 
 ```
 mailtracker-extension/
-├── manifest.json              # Chrome extension manifest v3
+├── manifest.json              # Chrome extension manifest v3 (permissions: storage, activeTab, alarms, notifications)
 ├── popup/
-│   ├── popup.html            # Settings UI (API key config)
+│   ├── popup.html            # Settings UI (API key config, notification toggle)
 │   ├── popup.css
 │   └── popup.js
 ├── content/
 │   ├── gmail.js              # Gmail content script (main logic)
+│   ├── xhr-interceptor.js    # Page context script (intercepts XHR/fetch)
 │   └── gmail.css             # Tracking badge styles
 ├── background/
-│   └── service-worker.js     # Handles API calls (avoids CORS)
+│   └── service-worker.js     # Handles API calls + notification polling
 └── icons/
     └── *.png                 # Extension icons
 ```
 
 ## Key Implementation Details
+
+### Browser Notifications
+- Uses `chrome.alarms` API to poll every 2 minutes
+- Fetches recent opens from `/api/opens/recent?since={timestamp}`
+- Shows desktop notification via `chrome.notifications.create()` for each new real open
+- Only notifies for real opens (proxy opens are filtered server-side)
+- Controlled by `showNotification` setting in popup
 
 ### CORS Workaround
 Content scripts running on mail.google.com cannot make cross-origin fetch requests. Solution:
