@@ -5,7 +5,9 @@
   "description": "Automatically insert tracking pixels into Gmail compose windows",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
