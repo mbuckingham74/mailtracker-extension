@@ -31,27 +31,36 @@ Since this is a personal extension, you'll load it unpacked:
 
 ## How It Works
 
-1. When you open Gmail, the extension watches for compose windows
-2. When you click Send, it:
+The extension uses XHR interception to inject tracking pixels at the network layer, bypassing Gmail's content sanitization:
+
+1. When you open Gmail, the extension:
+   - Watches for compose windows
+   - Injects an XHR interceptor into the page context
+2. When you click Send:
    - Creates a new tracking pixel via the Mailtrack API
-   - Inserts the invisible 1x1 GIF into your email
-   - Then sends the email
-3. When the recipient opens the email, the pixel loads and logs the open
+   - Sends pixel data to the XHR interceptor
+   - The interceptor modifies Gmail's send request to include the pixel
+3. The email arrives with the invisible 1x1 tracking pixel
+4. When the recipient opens the email, the pixel loads and logs the open
+
+**Why XHR Interception?**
+Gmail strips programmatically-inserted DOM content during send. By intercepting the XHR request, we inject the pixel AFTER Gmail processes the email but BEFORE it leaves the browser.
 
 ## Files
 
 ```
 mailtracker-extension/
-├── manifest.json          # Chrome extension manifest
+├── manifest.json          # Chrome extension manifest v3
 ├── popup/
 │   ├── popup.html        # Settings popup UI
 │   ├── popup.css         # Popup styles
 │   └── popup.js          # Popup logic
 ├── content/
-│   ├── gmail.js          # Gmail content script
+│   ├── gmail.js          # Gmail content script (coordinates tracking)
+│   ├── xhr-interceptor.js # Page context script (intercepts XHR/fetch)
 │   └── gmail.css         # Gmail styles
 ├── background/
-│   └── service-worker.js # Background service worker
+│   └── service-worker.js # Background service worker (handles API calls)
 └── icons/
     ├── create-icons.html # Icon generator
     ├── icon16.png        # Toolbar icon
