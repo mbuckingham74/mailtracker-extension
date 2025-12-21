@@ -170,27 +170,60 @@ async function insertTrackingPixel(composeBody, composeWindow) {
   selection.removeAllRanges();
   selection.addRange(range);
 
-  // Use a simple img tag with absolute minimal attributes
-  // Gmail should preserve standard img tags with external URLs
-  // Adding style to ensure it's truly invisible and doesn't affect layout
-  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:block;width:1px;height:1px;border:0;" alt="">`;
+  // Gmail strips most programmatically-inserted content during send.
+  // The key insight: Gmail preserves content that looks like user-typed HTML.
+  // We need to insert the pixel in a way that Gmail's sanitizer won't remove.
+  //
+  // Strategy: Insert as a simple img with no suspicious attributes.
+  // The img must be inserted via execCommand while the compose body is focused.
 
-  console.log('Mailtrack: Pixel HTML to insert:', pixelHtml);
+  // Try multiple pixel formats - Gmail may accept one but not others
+  const pixelFormats = [
+    // Format 1: Bare minimum img tag
+    `<img src="${track.pixel_url}">`,
+    // Format 2: With dimensions as attributes only (no style)
+    `<img src="${track.pixel_url}" width="1" height="1">`,
+    // Format 3: Wrapped in a div (sometimes helps)
+    `<div><img src="${track.pixel_url}" width="1" height="1"></div>`,
+  ];
 
-  // Try execCommand first
-  let success = document.execCommand('insertHTML', false, pixelHtml);
+  let success = false;
 
-  // If execCommand fails, try direct DOM insertion as fallback
-  if (!success || !hasTrackingPixel(composeBody)) {
-    console.log('Mailtrack: execCommand failed or pixel not found, trying direct DOM insertion');
+  for (let i = 0; i < pixelFormats.length && !success; i++) {
+    const pixelHtml = pixelFormats[i];
+    console.log(`Mailtrack: Trying pixel format ${i + 1}:`, pixelHtml);
+
+    // Re-focus and position cursor each attempt
+    composeBody.focus();
+    const sel = window.getSelection();
+    const rng = document.createRange();
+    rng.selectNodeContents(composeBody);
+    rng.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(rng);
+
+    // Insert via execCommand
+    document.execCommand('insertHTML', false, pixelHtml);
+
+    // Check if it worked
+    if (hasTrackingPixel(composeBody)) {
+      console.log(`Mailtrack: Format ${i + 1} succeeded!`);
+      success = true;
+    } else {
+      console.log(`Mailtrack: Format ${i + 1} was stripped immediately`);
+    }
+  }
+
+  // Last resort: direct DOM manipulation
+  if (!success) {
+    console.log('Mailtrack: All execCommand formats failed, trying direct DOM insertion');
     const img = document.createElement('img');
     img.src = track.pixel_url;
     img.width = 1;
     img.height = 1;
-    img.style.cssText = 'display:block;width:1px;height:1px;border:0;';
-    img.alt = '';
     composeBody.appendChild(img);
     success = hasTrackingPixel(composeBody);
+    console.log('Mailtrack: Direct DOM insertion result:', success);
   }
 
   if (success) {
