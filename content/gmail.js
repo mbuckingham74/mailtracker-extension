@@ -67,43 +67,63 @@ function hasTrackingPixel(element) {
 
 // Extract recipient emails from Gmail's compose window
 function extractRecipients(composeWindow) {
-  const recipients = [];
+  const recipients = new Set();
 
   // Method 1: Look for email chips/pills with email attribute (most reliable)
   const emailChips = composeWindow.querySelectorAll('[email]');
+  console.log('Mailtrack: Method 1 - Found', emailChips.length, 'elements with [email] attribute');
   emailChips.forEach(chip => {
     const email = chip.getAttribute('email');
     if (email && email.includes('@')) {
-      recipients.push(email);
+      console.log('Mailtrack: Method 1 - Adding recipient:', email);
+      recipients.add(email);
     }
   });
 
-  // Method 2: Look for data-hovercard-id containing @
-  if (recipients.length === 0) {
-    const hovercardElements = composeWindow.querySelectorAll('[data-hovercard-id]');
-    hovercardElements.forEach(el => {
-      const id = el.getAttribute('data-hovercard-id');
-      if (id && id.includes('@')) {
-        recipients.push(id);
-      }
-    });
-  }
+  // Method 2: Look for data-hovercard-id containing @ (always check, don't skip)
+  const hovercardElements = composeWindow.querySelectorAll('[data-hovercard-id]');
+  console.log('Mailtrack: Method 2 - Found', hovercardElements.length, 'elements with [data-hovercard-id]');
+  hovercardElements.forEach(el => {
+    const id = el.getAttribute('data-hovercard-id');
+    if (id && id.includes('@')) {
+      console.log('Mailtrack: Method 2 - Adding recipient:', id);
+      recipients.add(id);
+    }
+  });
 
-  // Method 3: Parse the "To" field text for email patterns
-  if (recipients.length === 0) {
-    const toContainer = composeWindow.querySelector('[aria-label="To recipients"]') ||
-                        composeWindow.querySelector('[name="to"]')?.closest('div');
-    if (toContainer) {
-      const text = toContainer.textContent || '';
-      const matches = text.match(/[\w.-]+@[\w.-]+\.\w+/g);
-      if (matches) {
-        recipients.push(...matches);
-      }
+  // Method 3: Parse the "To" field text for email patterns (always check)
+  const toContainer = composeWindow.querySelector('[aria-label="To recipients"]') ||
+                      composeWindow.querySelector('[name="to"]')?.closest('div');
+  if (toContainer) {
+    const text = toContainer.textContent || '';
+    console.log('Mailtrack: Method 3 - To field text:', text);
+    const matches = text.match(/[\w.-]+@[\w.-]+\.\w+/g);
+    if (matches) {
+      matches.forEach(email => {
+        console.log('Mailtrack: Method 3 - Adding recipient:', email);
+        recipients.add(email);
+      });
     }
   }
 
-  console.log('Mailtrack: Found recipients:', recipients);
-  return [...new Set(recipients)];
+  // Method 4: Look in CC and BCC fields too
+  const ccContainer = composeWindow.querySelector('[aria-label="Cc recipients"]');
+  const bccContainer = composeWindow.querySelector('[aria-label="Bcc recipients"]');
+  [ccContainer, bccContainer].forEach(container => {
+    if (container) {
+      container.querySelectorAll('[email]').forEach(chip => {
+        const email = chip.getAttribute('email');
+        if (email && email.includes('@')) {
+          console.log('Mailtrack: Method 4 (CC/BCC) - Adding recipient:', email);
+          recipients.add(email);
+        }
+      });
+    }
+  });
+
+  const result = [...recipients];
+  console.log('Mailtrack: Total recipients found:', result);
+  return result;
 }
 
 // Extract subject from Gmail's compose window
@@ -152,11 +172,26 @@ async function insertTrackingPixel(composeBody, composeWindow) {
 
   // Use a simple img tag with absolute minimal attributes
   // Gmail should preserve standard img tags with external URLs
-  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" alt="">`;
+  // Adding style to ensure it's truly invisible and doesn't affect layout
+  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:block;width:1px;height:1px;border:0;" alt="">`;
 
   console.log('Mailtrack: Pixel HTML to insert:', pixelHtml);
 
-  const success = document.execCommand('insertHTML', false, pixelHtml);
+  // Try execCommand first
+  let success = document.execCommand('insertHTML', false, pixelHtml);
+
+  // If execCommand fails, try direct DOM insertion as fallback
+  if (!success || !hasTrackingPixel(composeBody)) {
+    console.log('Mailtrack: execCommand failed or pixel not found, trying direct DOM insertion');
+    const img = document.createElement('img');
+    img.src = track.pixel_url;
+    img.width = 1;
+    img.height = 1;
+    img.style.cssText = 'display:block;width:1px;height:1px;border:0;';
+    img.alt = '';
+    composeBody.appendChild(img);
+    success = hasTrackingPixel(composeBody);
+  }
 
   if (success) {
     console.log('Mailtrack: execCommand returned true');
@@ -253,15 +288,23 @@ async function processComposeBody(composeBody) {
         const success = await insertTrackingPixel(composeBody, composeWindow);
         console.log('Mailtrack: Pixel insertion result:', success);
 
-        // Trigger send after brief delay
+        // Trigger send after delay to allow DOM to settle
+        // Using 300ms to ensure Gmail has processed the content
         setTimeout(() => {
+          console.log('Mailtrack: Triggering send after pixel insertion');
+          // Verify pixel is still there before sending
+          if (hasTrackingPixel(composeBody)) {
+            console.log('Mailtrack: Pixel confirmed present before send');
+          } else {
+            console.warn('Mailtrack: WARNING - Pixel disappeared before send!');
+          }
           const clickEvent = new MouseEvent('click', {
             bubbles: true,
             cancelable: true,
             view: window
           });
           sendButton.dispatchEvent(clickEvent);
-        }, 100);
+        }, 300);
 
       }, { capture: true, once: true });
     }
