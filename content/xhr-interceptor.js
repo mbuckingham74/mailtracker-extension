@@ -91,65 +91,67 @@
 
     console.log('Mailtrack XHR: Injecting pixel:', pixelData.pixelUrl);
 
-    // The tracking pixel HTML
-    const pixelHtml = `<img src="${pixelData.pixelUrl}" width="1" height="1" style="display:none">`;
-    const pixelHtmlEncoded = encodeURIComponent(pixelHtml);
+    // The tracking pixel HTML - minimal to avoid detection
+    const pixelHtml = `<img src="${pixelData.pixelUrl}" width="1" height="1">`;
+    // JSON-escaped version (for when HTML is inside JSON strings)
+    const pixelHtmlJsonEscaped = pixelHtml.replace(/"/g, '\\"');
 
     let modifiedBody = body;
 
-    // Gmail uses different body formats depending on the request type
-    // Try to find and modify the email body content
+    // Gmail uses a JSON array format where HTML is escaped within strings
+    // Example: ..."<div dir=\"ltr\">content</div>"...
+    // We need to insert our pixel with proper JSON escaping
 
-    // Pattern 1: body= parameter (URL encoded)
-    if (body.includes('body=')) {
-      // Find the body parameter and append pixel before closing tags
-      modifiedBody = body.replace(
-        /(body=)([^&]*)/,
-        (match, prefix, content) => {
-          const decoded = decodeURIComponent(content);
-          // Append pixel at the end of the body content
-          const modified = decoded + pixelHtml;
-          return prefix + encodeURIComponent(modified);
-        }
-      );
-      console.log('Mailtrack XHR: Modified body= parameter');
+    // Pattern 1: JSON-escaped HTML (most common Gmail format)
+    // Look for escaped closing div: <\/div> or </div> within JSON
+    const jsonEscapedDivPattern = /<\\\/div>(?=")/;
+    if (jsonEscapedDivPattern.test(body)) {
+      modifiedBody = body.replace(jsonEscapedDivPattern, pixelHtmlJsonEscaped + '<\\/div>');
+      console.log('Mailtrack XHR: Inserted pixel (JSON-escaped format)');
     }
 
-    // Pattern 2: Look for HTML content in the body
-    // Gmail often sends content with </div> or </body> tags
+    // Pattern 2: Regular escaped div in JSON string (alternative escaping)
     if (modifiedBody === body) {
-      // Try to find a closing div and insert before it
-      const closingDivPattern = /<\/div>(?=[^<]*$)/i;
-      if (closingDivPattern.test(body)) {
-        modifiedBody = body.replace(closingDivPattern, pixelHtml + '</div>');
-        console.log('Mailtrack XHR: Inserted before closing </div>');
+      const altPattern = /<\/div>(?=")/;
+      if (altPattern.test(body)) {
+        modifiedBody = body.replace(altPattern, pixelHtmlJsonEscaped + '</div>');
+        console.log('Mailtrack XHR: Inserted pixel (alt JSON format)');
       }
     }
 
-    // Pattern 3: JSON body (newer Gmail API)
-    if (modifiedBody === body && body.startsWith('{')) {
-      try {
-        const jsonBody = JSON.parse(body);
-        // Navigate through the JSON structure to find email content
-        modifiedBody = JSON.stringify(injectPixelIntoJson(jsonBody, pixelHtml));
-        console.log('Mailtrack XHR: Modified JSON body');
-      } catch (e) {
-        // Not valid JSON, continue
+    // Pattern 3: Look for the email content pattern in Gmail's format
+    // Gmail format: [0,"<div dir=\"ltr\">content</div>"]
+    if (modifiedBody === body) {
+      // Find HTML content in JSON array format
+      const gmailHtmlPattern = /("< *div[^"]*>)([^"]*?)(<\\?\/div>")/ ;
+      if (body.match(gmailHtmlPattern)) {
+        modifiedBody = body.replace(gmailHtmlPattern, (match, start, content, end) => {
+          // Insert pixel before closing div, with proper escaping
+          const escapedPixel = pixelHtml.replace(/"/g, '\\"').replace(/\//g, '\\/');
+          return start + content + escapedPixel + end;
+        });
+        console.log('Mailtrack XHR: Inserted pixel (Gmail HTML pattern)');
       }
     }
 
-    // Pattern 4: Multipart form data or other formats
-    // Look for common HTML patterns and append pixel
+    // Pattern 4: Direct string replacement for escaped HTML
     if (modifiedBody === body) {
-      // If we find any HTML-ish content, try to append
-      const htmlPattern = /<div[^>]*>[\s\S]*<\/div>/i;
-      if (htmlPattern.test(body)) {
-        // Find the last </div> and insert before it
-        const lastDivIndex = body.lastIndexOf('</div>');
-        if (lastDivIndex !== -1) {
-          modifiedBody = body.slice(0, lastDivIndex) + pixelHtml + body.slice(lastDivIndex);
-          console.log('Mailtrack XHR: Inserted before last </div>');
-        }
+      // Try finding the last occurrence of escaped </div> in the body
+      const escapedClosingDiv = '<\\/div>';
+      const lastIndex = body.lastIndexOf(escapedClosingDiv);
+      if (lastIndex !== -1) {
+        const escapedPixel = pixelHtml.replace(/"/g, '\\"').replace(/\//g, '\\/');
+        modifiedBody = body.slice(0, lastIndex) + escapedPixel + body.slice(lastIndex);
+        console.log('Mailtrack XHR: Inserted pixel (escaped div search)');
+      }
+    }
+
+    // Pattern 5: Fallback - unescaped HTML (older format or form data)
+    if (modifiedBody === body) {
+      const lastDivIndex = body.lastIndexOf('</div>');
+      if (lastDivIndex !== -1 && !body.includes('<\\/div>')) {
+        modifiedBody = body.slice(0, lastDivIndex) + pixelHtml + body.slice(lastDivIndex);
+        console.log('Mailtrack XHR: Inserted pixel (unescaped HTML)');
       }
     }
 
