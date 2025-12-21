@@ -103,37 +103,44 @@ function extractRecipients(composeWindow) {
     }
   }
 
-  // Return unique recipients joined by comma, or empty string
-  return [...new Set(recipients)].join(', ');
+  // Return unique recipients as array
+  return [...new Set(recipients)];
 }
 
-// Insert tracking pixel into compose window
-async function insertTrackingPixel(composeBody, composeWindow) {
-  // Get recipient and subject from the compose window
-  const recipient = extractRecipients(composeWindow);
+// Insert tracking pixels into compose window (one per recipient)
+async function insertTrackingPixels(composeBody, composeWindow) {
+  // Get recipients and subject from the compose window
+  const recipients = extractRecipients(composeWindow);
 
   const subjectInput = composeWindow.querySelector('input[name="subjectbox"]') ||
                        composeWindow.querySelector('input[aria-label="Subject"]');
 
   const subject = subjectInput?.value || '';
 
-  console.log('Mailtrack: Inserting pixel for:', recipient, subject);
+  // If no recipients found, create one pixel with empty recipient
+  const recipientList = recipients.length > 0 ? recipients : [''];
 
-  // Create tracking pixel
-  const track = await createTrackingPixel(recipient, subject);
+  console.log('Mailtrack: Inserting pixels for', recipientList.length, 'recipient(s):', recipientList, subject);
 
-  if (!track) {
-    return false;
+  let successCount = 0;
+
+  // Create a tracking pixel for each recipient
+  for (const recipient of recipientList) {
+    const track = await createTrackingPixel(recipient, subject);
+
+    if (track) {
+      // Create the tracking pixel element
+      const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:none" alt="" data-mailtrack-id="${track.id}" data-mailtrack-recipient="${recipient}">`;
+
+      // Insert at the end of the email body
+      composeBody.insertAdjacentHTML('beforeend', pixelHtml);
+
+      console.log('Mailtrack: Inserted tracking pixel for', recipient || '(unknown)', track.id);
+      successCount++;
+    }
   }
 
-  // Create the tracking pixel element
-  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:none" alt="" data-mailtrack-id="${track.id}">`;
-
-  // Insert at the end of the email body
-  composeBody.insertAdjacentHTML('beforeend', pixelHtml);
-
-  console.log('Mailtrack: Inserted tracking pixel', track.id);
-  return true;
+  return successCount > 0;
 }
 
 // Check if a compose body has a tracking pixel
@@ -206,7 +213,7 @@ async function processComposeBody(composeBody) {
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        const success = await insertTrackingPixel(composeBody, composeWindow);
+        const success = await insertTrackingPixels(composeBody, composeWindow);
 
         if (success) {
           console.log('Mailtrack: Pixel inserted, triggering send');
