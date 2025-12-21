@@ -111,8 +111,58 @@ function extractSubject(composeWindow) {
   return subjectInput?.value || '';
 }
 
-// Insert tracking pixel into compose body using execCommand
-// Using div with background-image CSS which survives Gmail's sanitization better than img tags
+// Insert HTML using InputEvent (simulates paste-like behavior)
+function insertViaInputEvent(element, html) {
+  element.focus();
+
+  // Create and dispatch an insertFromPaste input event
+  const inputEvent = new InputEvent('beforeinput', {
+    inputType: 'insertFromPaste',
+    data: null,
+    dataTransfer: createDataTransfer(html),
+    bubbles: true,
+    cancelable: true,
+  });
+
+  const dispatched = element.dispatchEvent(inputEvent);
+  console.log('Mailtrack: InputEvent dispatched:', dispatched);
+  return dispatched;
+}
+
+// Create a DataTransfer object with HTML content
+function createDataTransfer(html) {
+  const dt = new DataTransfer();
+  dt.setData('text/html', html);
+  return dt;
+}
+
+// Insert HTML by directly manipulating innerHTML (appending at end)
+function insertViaInnerHTML(element, html) {
+  const originalHTML = element.innerHTML;
+  element.innerHTML = originalHTML + html;
+  console.log('Mailtrack: Inserted via innerHTML append');
+  return true;
+}
+
+// Insert using insertAdjacentHTML
+function insertViaAdjacentHTML(element, html) {
+  element.insertAdjacentHTML('beforeend', html);
+  console.log('Mailtrack: Inserted via insertAdjacentHTML');
+  return true;
+}
+
+// Trigger input event to notify Gmail of changes
+function triggerInputEvent(element) {
+  const event = new Event('input', { bubbles: true, cancelable: true });
+  element.dispatchEvent(event);
+
+  // Also trigger a mutation-like change
+  const changeEvent = new Event('change', { bubbles: true });
+  element.dispatchEvent(changeEvent);
+}
+
+// Insert tracking pixel into compose body
+// Try multiple methods since Gmail aggressively sanitizes content
 async function insertTrackingPixel(composeBody, composeWindow) {
   if (hasTrackingPixel(composeBody)) {
     console.log('Mailtrack: Pixel already exists, skipping');
@@ -135,93 +185,89 @@ async function insertTrackingPixel(composeBody, composeWindow) {
     return false;
   }
 
-  console.log('Mailtrack: Inserting pixel via execCommand', track.id);
+  console.log('Mailtrack: Inserting pixel', track.id);
 
-  // Focus the compose body
-  composeBody.focus();
+  // The pixel HTML - keeping it minimal
+  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1">`;
 
-  // Move cursor to end of compose body
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(composeBody);
-  range.collapse(false); // collapse to end
-  selection.removeAllRanges();
-  selection.addRange(range);
-
-  // Gmail strips most programmatically-inserted content during send.
-  // The key insight: Gmail preserves content that looks like user-typed HTML.
-  // We need to insert the pixel in a way that Gmail's sanitizer won't remove.
-  //
-  // Strategy: Insert as a simple img with no suspicious attributes.
-  // The img must be inserted via execCommand while the compose body is focused.
-
-  // Try multiple pixel formats - Gmail may accept one but not others
-  const pixelFormats = [
-    // Format 1: Bare minimum img tag
-    `<img src="${track.pixel_url}">`,
-    // Format 2: With dimensions as attributes only (no style)
-    `<img src="${track.pixel_url}" width="1" height="1">`,
-    // Format 3: Wrapped in a div (sometimes helps)
-    `<div><img src="${track.pixel_url}" width="1" height="1"></div>`,
-  ];
-
-  let success = false;
-
-  for (let i = 0; i < pixelFormats.length && !success; i++) {
-    const pixelHtml = pixelFormats[i];
-    console.log(`Mailtrack: Trying pixel format ${i + 1}:`, pixelHtml);
-
-    // Re-focus and position cursor each attempt
-    composeBody.focus();
-    const sel = window.getSelection();
-    const rng = document.createRange();
-    rng.selectNodeContents(composeBody);
-    rng.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(rng);
-
-    // Insert via execCommand
-    document.execCommand('insertHTML', false, pixelHtml);
-
-    // Check if it worked
+  // Method 1: insertAdjacentHTML (most reliable for appending)
+  console.log('Mailtrack: Method 1 - insertAdjacentHTML');
+  try {
+    insertViaAdjacentHTML(composeBody, pixelHtml);
+    triggerInputEvent(composeBody);
+    await new Promise(resolve => setTimeout(resolve, 50));
     if (hasTrackingPixel(composeBody)) {
-      console.log(`Mailtrack: Format ${i + 1} succeeded!`);
-      success = true;
-    } else {
-      console.log(`Mailtrack: Format ${i + 1} was stripped immediately`);
+      console.log('Mailtrack: Method 1 SUCCESS');
+      logResult(composeBody);
+      return true;
     }
+    console.log('Mailtrack: Method 1 failed - pixel stripped');
+  } catch (e) {
+    console.log('Mailtrack: Method 1 error:', e.message);
   }
 
-  // Last resort: direct DOM manipulation
-  if (!success) {
-    console.log('Mailtrack: All execCommand formats failed, trying direct DOM insertion');
+  // Method 2: Direct innerHTML manipulation
+  console.log('Mailtrack: Method 2 - innerHTML append');
+  try {
+    insertViaInnerHTML(composeBody, pixelHtml);
+    triggerInputEvent(composeBody);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    if (hasTrackingPixel(composeBody)) {
+      console.log('Mailtrack: Method 2 SUCCESS');
+      logResult(composeBody);
+      return true;
+    }
+    console.log('Mailtrack: Method 2 failed - pixel stripped');
+  } catch (e) {
+    console.log('Mailtrack: Method 2 error:', e.message);
+  }
+
+  // Method 3: Create img element and appendChild
+  console.log('Mailtrack: Method 3 - createElement + appendChild');
+  try {
     const img = document.createElement('img');
     img.src = track.pixel_url;
     img.width = 1;
     img.height = 1;
     composeBody.appendChild(img);
-    success = hasTrackingPixel(composeBody);
-    console.log('Mailtrack: Direct DOM insertion result:', success);
-  }
-
-  if (success) {
-    console.log('Mailtrack: execCommand returned true');
-    // Log full compose body to see what's there
-    console.log('Mailtrack: Full compose body innerHTML:', composeBody.innerHTML);
-
-    // Verify it's actually in the DOM
+    triggerInputEvent(composeBody);
+    await new Promise(resolve => setTimeout(resolve, 50));
     if (hasTrackingPixel(composeBody)) {
-      console.log('Mailtrack: SUCCESS - Pixel verified in compose body');
+      console.log('Mailtrack: Method 3 SUCCESS');
+      logResult(composeBody);
       return true;
-    } else {
-      console.warn('Mailtrack: FAILED - execCommand succeeded but pixel not found in DOM');
-      console.log('Mailtrack: Searching for any img tags:', composeBody.querySelectorAll('img').length);
-      return false;
     }
-  } else {
-    console.error('Mailtrack: execCommand returned false');
-    return false;
+    console.log('Mailtrack: Method 3 failed - pixel stripped');
+  } catch (e) {
+    console.log('Mailtrack: Method 3 error:', e.message);
   }
+
+  // Method 4: execCommand as last resort (deprecated but sometimes works)
+  console.log('Mailtrack: Method 4 - execCommand insertHTML');
+  try {
+    composeBody.focus();
+    const execResult = document.execCommand('insertHTML', false, pixelHtml);
+    console.log('Mailtrack: execCommand returned:', execResult);
+    triggerInputEvent(composeBody);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    if (hasTrackingPixel(composeBody)) {
+      console.log('Mailtrack: Method 4 SUCCESS');
+      logResult(composeBody);
+      return true;
+    }
+    console.log('Mailtrack: Method 4 failed - pixel stripped');
+  } catch (e) {
+    console.log('Mailtrack: Method 4 error:', e.message);
+  }
+
+  console.error('Mailtrack: All insertion methods failed');
+  return false;
+}
+
+// Helper to log the result
+function logResult(composeBody) {
+  console.log('Mailtrack: Full compose body innerHTML:', composeBody.innerHTML);
+  console.log('Mailtrack: Pixel verified in compose body');
 }
 
 // Show notification badge
