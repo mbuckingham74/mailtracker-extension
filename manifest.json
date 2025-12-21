@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Mailtrack Pixel Inserter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically insert tracking pixels into Gmail compose windows",
   "permissions": [
     "storage",
@@ -29,10 +29,16 @@
       "matches": ["https://mail.google.com/*"],
       "js": ["content/gmail.js"],
       "css": ["content/gmail.css"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "background": {
     "service_worker": "background/service-worker.js"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content/xhr-interceptor.js"],
+      "matches": ["https://mail.google.com/*"]
+    }
+  ]
 }
