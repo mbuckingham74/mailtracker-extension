@@ -1,8 +1,6 @@
 // Mailtrack Gmail Content Script
 // Automatically inserts tracking pixels into Gmail compose windows
 
-const API_BASE = 'https://mailtrack.tachyonfuture.com';
-
 // Track which compose windows we've already processed
 const processedComposeWindows = new WeakSet();
 
@@ -15,7 +13,7 @@ async function getSettings() {
   });
 }
 
-// Create a new tracking pixel via API
+// Create a new tracking pixel via background service worker
 async function createTrackingPixel(recipient, subject) {
   const settings = await getSettings();
 
@@ -25,26 +23,23 @@ async function createTrackingPixel(recipient, subject) {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/api/tracks`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': settings.apiKey
-      },
-      body: JSON.stringify({
+    // Use message passing to background service worker (avoids CORS issues)
+    const response = await chrome.runtime.sendMessage({
+      type: 'CREATE_TRACK',
+      data: {
         recipient: recipient || '',
         subject: subject || '',
         notes: 'Created via Chrome extension'
-      })
+      }
     });
 
-    if (!response.ok) {
-      console.error('Mailtrack: Failed to create tracking pixel', response.status);
+    if (response.error) {
+      console.error('Mailtrack: Failed to create tracking pixel', response.error);
       return null;
     }
 
-    const data = await response.json();
-    return data;
+    console.log('Mailtrack: Created tracking pixel', response.id);
+    return response;
   } catch (error) {
     console.error('Mailtrack: API error', error);
     return null;
@@ -52,31 +47,25 @@ async function createTrackingPixel(recipient, subject) {
 }
 
 // Insert tracking pixel into compose window
-async function insertTrackingPixel(composeWindow) {
-  // Get recipient and subject
-  const recipientField = composeWindow.querySelector('input[aria-label="To"]') ||
-                         composeWindow.querySelector('input[name="to"]') ||
-                         composeWindow.querySelector('[data-hovercard-id]');
-  const subjectField = composeWindow.querySelector('input[name="subjectbox"]') ||
+async function insertTrackingPixel(composeBody, composeWindow) {
+  // Get recipient and subject from the compose window
+  const recipientInput = composeWindow.querySelector('input[name="to"]') ||
+                         composeWindow.querySelector('input[aria-label="To recipients"]') ||
+                         composeWindow.querySelector('input[aria-label="To"]') ||
+                         composeWindow.querySelector('[name="to"]');
+
+  const subjectInput = composeWindow.querySelector('input[name="subjectbox"]') ||
                        composeWindow.querySelector('input[aria-label="Subject"]');
 
-  const recipient = recipientField?.value || '';
-  const subject = subjectField?.value || '';
+  const recipient = recipientInput?.value || '';
+  const subject = subjectInput?.value || '';
+
+  console.log('Mailtrack: Inserting pixel for:', recipient, subject);
 
   // Create tracking pixel
   const track = await createTrackingPixel(recipient, subject);
 
   if (!track) {
-    return false;
-  }
-
-  // Find the compose body
-  const composeBody = composeWindow.querySelector('[aria-label="Message Body"]') ||
-                      composeWindow.querySelector('[g_editable="true"]') ||
-                      composeWindow.querySelector('[contenteditable="true"]');
-
-  if (!composeBody) {
-    console.error('Mailtrack: Could not find compose body');
     return false;
   }
 
@@ -90,159 +79,127 @@ async function insertTrackingPixel(composeWindow) {
   return true;
 }
 
-// Show notification badge on compose window
+// Check if a compose body has a tracking pixel
+function hasTrackingPixel(element) {
+  return element.querySelector('img[data-mailtrack-id]') !== null;
+}
+
+// Show notification badge
 function showInsertedBadge(composeWindow) {
-  // Check if badge already exists
-  if (composeWindow.querySelector('.mailtrack-badge')) {
-    return;
-  }
+  // Find a good place to show the badge
+  const existingBadge = composeWindow.querySelector('.mailtrack-badge');
+  if (existingBadge) return;
 
-  // Find the toolbar area
   const toolbar = composeWindow.querySelector('[role="toolbar"]') ||
-                  composeWindow.querySelector('.btC');
+                  composeWindow.querySelector('.btC') ||
+                  composeWindow.querySelector('.gU.Up');
 
-  if (!toolbar) {
-    return;
+  if (toolbar) {
+    const badge = document.createElement('div');
+    badge.className = 'mailtrack-badge';
+    badge.innerHTML = '✓ Tracking';
+    badge.title = 'Mailtrack pixel will be inserted on send';
+    toolbar.appendChild(badge);
   }
-
-  // Create badge
-  const badge = document.createElement('div');
-  badge.className = 'mailtrack-badge';
-  badge.innerHTML = '✓ Tracking';
-  badge.title = 'Mailtrack pixel inserted';
-
-  toolbar.appendChild(badge);
 }
 
-// Check if a compose window has a tracking pixel
-function hasTrackingPixel(composeWindow) {
-  return composeWindow.querySelector('img[data-mailtrack-id]') !== null;
-}
-
-// Process a compose window
-async function processComposeWindow(composeWindow) {
-  // Skip if already processed
-  if (processedComposeWindows.has(composeWindow)) {
+// Process a compose body element
+async function processComposeBody(composeBody) {
+  if (processedComposeWindows.has(composeBody)) {
     return;
   }
 
   const settings = await getSettings();
-
-  // Skip if disabled
-  if (!settings.enabled) {
+  if (!settings.enabled || !settings.apiKey) {
+    console.log('Mailtrack: Disabled or no API key');
     return;
   }
 
-  // Skip if no API key
-  if (!settings.apiKey) {
-    return;
-  }
+  processedComposeWindows.add(composeBody);
+  console.log('Mailtrack: Found compose window');
 
-  // Mark as processed
-  processedComposeWindows.add(composeWindow);
+  // Find the parent compose window/dialog
+  const composeWindow = composeBody.closest('[role="dialog"]') ||
+                        composeBody.closest('.nH.Hd') ||
+                        composeBody.closest('form') ||
+                        composeBody.parentElement.parentElement.parentElement;
 
-  // Wait for compose window to fully load
-  await new Promise(resolve => setTimeout(resolve, 500));
+  // Show badge
+  showInsertedBadge(composeWindow);
 
-  // Skip if already has a tracking pixel
-  if (hasTrackingPixel(composeWindow)) {
-    showInsertedBadge(composeWindow);
-    return;
-  }
+  // Find and intercept the send button
+  const findAndInterceptSendButton = () => {
+    // Gmail send button selectors
+    const sendButton = composeWindow.querySelector('[aria-label*="Send"]') ||
+                       composeWindow.querySelector('[data-tooltip*="Send"]') ||
+                       composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
 
-  // Watch for send button click to insert pixel just before sending
-  const sendButton = composeWindow.querySelector('[aria-label*="Send"]') ||
-                     composeWindow.querySelector('[data-tooltip*="Send"]');
+    if (sendButton && !sendButton.dataset.mailtrackIntercepted) {
+      sendButton.dataset.mailtrackIntercepted = 'true';
+      console.log('Mailtrack: Intercepting send button');
 
-  if (sendButton) {
-    sendButton.addEventListener('click', async (e) => {
-      // Check if pixel already inserted
-      if (hasTrackingPixel(composeWindow)) {
-        return;
-      }
+      sendButton.addEventListener('mousedown', async (e) => {
+        if (hasTrackingPixel(composeBody)) {
+          console.log('Mailtrack: Pixel already inserted, allowing send');
+          return; // Already has pixel, let it send
+        }
 
-      // Prevent immediate send
-      e.preventDefault();
-      e.stopPropagation();
+        console.log('Mailtrack: Intercepted send, inserting pixel...');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
 
-      // Insert pixel
-      const success = await insertTrackingPixel(composeWindow);
+        const success = await insertTrackingPixel(composeBody, composeWindow);
 
-      if (success) {
-        showInsertedBadge(composeWindow);
+        if (success) {
+          console.log('Mailtrack: Pixel inserted, triggering send');
+        } else {
+          console.log('Mailtrack: Failed to insert pixel, sending anyway');
+        }
 
-        // Now actually send
+        // Trigger the send after a brief delay
         setTimeout(() => {
-          sendButton.click();
+          // Create and dispatch a new click event
+          const clickEvent = new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          });
+          sendButton.dispatchEvent(clickEvent);
         }, 100);
-      } else {
-        // Failed to insert, let the email send anyway
-        setTimeout(() => {
-          sendButton.click();
-        }, 100);
-      }
-    }, { once: true, capture: true });
-  }
 
-  // Also add a manual insert button
-  addManualInsertButton(composeWindow);
-}
-
-// Add a manual insert button to the compose toolbar
-function addManualInsertButton(composeWindow) {
-  const toolbar = composeWindow.querySelector('[role="toolbar"]') ||
-                  composeWindow.querySelector('.btC');
-
-  if (!toolbar || toolbar.querySelector('.mailtrack-insert-btn')) {
-    return;
-  }
-
-  const button = document.createElement('div');
-  button.className = 'mailtrack-insert-btn';
-  button.innerHTML = '📧';
-  button.title = 'Insert Mailtrack pixel';
-
-  button.addEventListener('click', async () => {
-    if (hasTrackingPixel(composeWindow)) {
-      alert('Tracking pixel already inserted!');
-      return;
+      }, { capture: true, once: true });
     }
+  };
 
-    const success = await insertTrackingPixel(composeWindow);
+  // Try to find send button now and also watch for it
+  findAndInterceptSendButton();
 
-    if (success) {
-      showInsertedBadge(composeWindow);
-      button.style.display = 'none';
-    } else {
-      alert('Failed to insert tracking pixel. Check your API key.');
-    }
+  // Also observe for the send button appearing later
+  const buttonObserver = new MutationObserver(() => {
+    findAndInterceptSendButton();
   });
+  buttonObserver.observe(composeWindow, { childList: true, subtree: true });
 
-  toolbar.insertBefore(button, toolbar.firstChild);
+  // Clean up observer after 30 seconds
+  setTimeout(() => buttonObserver.disconnect(), 30000);
 }
 
-// Observe for new compose windows
+// Main observer for compose windows
 function observeComposeWindows() {
+  console.log('Mailtrack: Starting compose window observer');
+
   const observer = new MutationObserver((mutations) => {
-    // Look for compose windows
-    const composeWindows = document.querySelectorAll('[role="dialog"]');
+    // Look for contenteditable divs which are compose bodies
+    const composeBodies = document.querySelectorAll(
+      'div[aria-label="Message Body"][contenteditable="true"], ' +
+      'div[g_editable="true"], ' +
+      'div[contenteditable="true"][aria-multiline="true"]'
+    );
 
-    composeWindows.forEach(dialog => {
-      // Check if this is a compose window (has a "To" field)
-      const isCompose = dialog.querySelector('input[aria-label="To"]') ||
-                        dialog.querySelector('input[name="to"]');
-
-      if (isCompose) {
-        processComposeWindow(dialog);
-      }
-    });
-
-    // Also check for inline compose (reply)
-    const inlineCompose = document.querySelectorAll('[g_editable="true"]');
-    inlineCompose.forEach(compose => {
-      const composeContainer = compose.closest('tr') || compose.closest('[role="listitem"]');
-      if (composeContainer) {
-        processComposeWindow(composeContainer);
+    composeBodies.forEach(body => {
+      if (!processedComposeWindows.has(body)) {
+        processComposeBody(body);
       }
     });
   });
@@ -251,6 +208,14 @@ function observeComposeWindows() {
     childList: true,
     subtree: true
   });
+
+  // Also check immediately
+  const existingBodies = document.querySelectorAll(
+    'div[aria-label="Message Body"][contenteditable="true"], ' +
+    'div[g_editable="true"], ' +
+    'div[contenteditable="true"][aria-multiline="true"]'
+  );
+  existingBodies.forEach(body => processComposeBody(body));
 }
 
 // Initialize
