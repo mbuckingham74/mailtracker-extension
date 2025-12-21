@@ -13,8 +13,17 @@ async function getSettings() {
   });
 }
 
+// Generate a UUID for message grouping
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 // Create a new tracking pixel via background service worker
-async function createTrackingPixel(recipient, subject) {
+async function createTrackingPixel(recipient, subject, messageGroupId) {
   const settings = await getSettings();
 
   if (!settings.apiKey) {
@@ -29,7 +38,8 @@ async function createTrackingPixel(recipient, subject) {
       data: {
         recipient: recipient || '',
         subject: subject || '',
-        notes: 'Created via Chrome extension'
+        notes: 'Created via Chrome extension',
+        message_group_id: messageGroupId
       }
     });
 
@@ -122,11 +132,13 @@ async function insertTrackingPixels(composeBody, composeWindow) {
 
   console.log('Mailtrack: Inserting pixels for', recipientList.length, 'recipient(s):', recipientList, subject);
 
+  // Generate a single group ID for all recipients in this email
+  const messageGroupId = generateUUID();
   let successCount = 0;
 
   // Create a tracking pixel for each recipient
   for (const recipient of recipientList) {
-    const track = await createTrackingPixel(recipient, subject);
+    const track = await createTrackingPixel(recipient, subject, messageGroupId);
 
     if (track) {
       // Create the tracking pixel element
