@@ -150,21 +150,26 @@ async function insertTrackingPixel(composeBody, composeWindow) {
   selection.removeAllRanges();
   selection.addRange(range);
 
-  // Use a simple img tag - Gmail allows external images
-  // Keep it minimal: just src, width, height - no custom attributes that Gmail might strip
-  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:block">`;
+  // Use a simple img tag with absolute minimal attributes
+  // Gmail should preserve standard img tags with external URLs
+  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" alt="">`;
+
+  console.log('Mailtrack: Pixel HTML to insert:', pixelHtml);
 
   const success = document.execCommand('insertHTML', false, pixelHtml);
 
   if (success) {
-    console.log('Mailtrack: Pixel inserted successfully via execCommand');
+    console.log('Mailtrack: execCommand returned true');
+    // Log full compose body to see what's there
+    console.log('Mailtrack: Full compose body innerHTML:', composeBody.innerHTML);
+
     // Verify it's actually in the DOM
     if (hasTrackingPixel(composeBody)) {
-      console.log('Mailtrack: Verified pixel is in compose body');
-      console.log('Mailtrack: Compose body HTML preview:', composeBody.innerHTML.substring(0, 500));
+      console.log('Mailtrack: SUCCESS - Pixel verified in compose body');
       return true;
     } else {
-      console.warn('Mailtrack: execCommand returned true but pixel not found in DOM');
+      console.warn('Mailtrack: FAILED - execCommand succeeded but pixel not found in DOM');
+      console.log('Mailtrack: Searching for any img tags:', composeBody.querySelectorAll('img').length);
       return false;
     }
   } else {
