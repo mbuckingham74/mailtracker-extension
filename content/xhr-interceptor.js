@@ -17,11 +17,23 @@
   // Key: message identifier, Value: { pixelUrl, recipient, subject }
   window.__mailtrackPendingPixels = window.__mailtrackPendingPixels || {};
 
+  // Flag to indicate we're waiting for a pixel before sending
+  window.__mailtrackWaitingForPixel = false;
+  window.__mailtrackPixelReady = false;
+
   // Listen for messages from the content script
   window.addEventListener('mailtrack-inject-pixel', function(e) {
     const { pixelUrl, recipient, subject, messageId } = e.detail;
     console.log('Mailtrack XHR: Received pixel to inject:', pixelUrl);
     window.__mailtrackPendingPixels[messageId] = { pixelUrl, recipient, subject };
+    window.__mailtrackPixelReady = true;
+  });
+
+  // Listen for "prepare for send" signal - this should come BEFORE the actual send
+  window.addEventListener('mailtrack-prepare-send', function(e) {
+    console.log('Mailtrack XHR: Received prepare-send signal, will wait for pixel');
+    window.__mailtrackWaitingForPixel = true;
+    window.__mailtrackPixelReady = false;
   });
 
   // Helper to detect if this is a Gmail send request
@@ -191,6 +203,24 @@
     return obj;
   }
 
+  // Helper to wait for pixel with timeout
+  function waitForPixel(maxWaitMs = 2000) {
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (window.__mailtrackPixelReady || Object.keys(window.__mailtrackPendingPixels).length > 0) {
+          clearInterval(checkInterval);
+          console.log('Mailtrack XHR: Pixel is ready, proceeding with send');
+          resolve(true);
+        } else if (Date.now() - startTime > maxWaitMs) {
+          clearInterval(checkInterval);
+          console.log('Mailtrack XHR: Timeout waiting for pixel, proceeding without');
+          resolve(false);
+        }
+      }, 50);
+    });
+  }
+
   // Override XMLHttpRequest
   const originalXHROpen = XMLHttpRequest.prototype.open;
   const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -202,10 +232,31 @@
   };
 
   XMLHttpRequest.prototype.send = function(body) {
-    if (this._mailtrackMethod === 'POST' && isGmailSendRequest(this._mailtrackUrl, body)) {
-      console.log('Mailtrack XHR: Intercepted potential send request to:', this._mailtrackUrl);
+    const xhr = this;
+    const url = this._mailtrackUrl;
+    const method = this._mailtrackMethod;
 
-      if (body && typeof body === 'string') {
+    // Check if this looks like an email send request
+    if (method === 'POST' && body && typeof body === 'string') {
+      const isEmailSend = body.includes('<div') && body.includes('</div>');
+
+      if (isEmailSend) {
+        console.log('Mailtrack XHR: Detected email send request');
+
+        // If we're waiting for a pixel, delay the send
+        if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
+          console.log('Mailtrack XHR: Waiting for pixel before sending...');
+
+          // We need to handle this asynchronously
+          waitForPixel(2000).then(() => {
+            const modifiedBody = injectPixelIntoBody(body);
+            window.__mailtrackWaitingForPixel = false;
+            originalXHRSend.call(xhr, modifiedBody);
+          });
+          return; // Don't send yet
+        }
+
+        // Pixel already ready or not waiting, inject and send
         const modifiedBody = injectPixelIntoBody(body);
         return originalXHRSend.call(this, modifiedBody);
       }

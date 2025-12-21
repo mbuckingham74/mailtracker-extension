@@ -244,16 +244,19 @@ async function processComposeBody(composeBody) {
       console.log('Mailtrack: Intercepting send button');
       showInsertedBadge(composeWindow, true);
 
-      // Intercept mousedown (before click) - BLOCK until pixel is ready
+      // Intercept mousedown (before click) - signal XHR interceptor to wait
       sendButton.addEventListener('mousedown', async (e) => {
-        console.log('Mailtrack: Send button clicked, ensuring pixel is ready...');
+        console.log('Mailtrack: Send button clicked, preparing pixel...');
 
-        // CRITICAL: Stop the event and prepare pixel synchronously
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
+        // IMMEDIATELY signal XHR interceptor to wait for pixel
+        // This must happen synchronously before Gmail's click handler fires
+        window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
+        console.log('Mailtrack: Sent prepare-send signal to XHR interceptor');
 
-        // Prepare the tracking pixel if not already done
+        // DON'T block the event - let Gmail proceed
+        // The XHR interceptor will delay the actual network request until pixel is ready
+
+        // Prepare the tracking pixel (async, but XHR interceptor is waiting)
         if (!pixelPrepared) {
           await preparePixelNow();
         } else {
@@ -267,20 +270,9 @@ async function processComposeBody(composeBody) {
           }
         }
 
-        // Small delay to ensure XHR interceptor has the pixel
-        await new Promise(resolve => setTimeout(resolve, 100));
+        console.log('Mailtrack: Pixel ready, XHR interceptor will inject it');
 
-        console.log('Mailtrack: Pixel ready, triggering actual send...');
-
-        // Now trigger the actual send
-        const clickEvent = new MouseEvent('click', {
-          bubbles: true,
-          cancelable: true,
-          view: window
-        });
-        sendButton.dispatchEvent(clickEvent);
-
-      }, { capture: true, once: true });
+      }, { capture: true });
     }
   };
 
