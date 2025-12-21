@@ -62,38 +62,47 @@ async function createTrackingPixel(recipient, subject, messageGroupId) {
 
 // Check if a compose body already has a tracking pixel
 function hasTrackingPixel(element) {
-  // Check for our tracking div with background-image
-  return element.querySelector('div[data-mailtrack]') !== null ||
-         element.innerHTML.includes('mailtrack.tachyonfuture.com');
+  return element.innerHTML.includes('mailtrack.tachyonfuture.com');
 }
 
 // Extract recipient emails from Gmail's compose window
 function extractRecipients(composeWindow) {
   const recipients = [];
 
-  // Method 1: Look for email chips/pills with email attribute
-  const emailChips = composeWindow.querySelectorAll('[email], [data-hovercard-id*="@"], [data-email]');
+  // Method 1: Look for email chips/pills with email attribute (most reliable)
+  const emailChips = composeWindow.querySelectorAll('[email]');
   emailChips.forEach(chip => {
-    const email = chip.getAttribute('email') ||
-                  chip.getAttribute('data-email') ||
-                  chip.getAttribute('data-hovercard-id');
+    const email = chip.getAttribute('email');
     if (email && email.includes('@')) {
       recipients.push(email);
     }
   });
 
-  // Method 2: Look for spans with email class
+  // Method 2: Look for data-hovercard-id containing @
   if (recipients.length === 0) {
-    const spans = composeWindow.querySelectorAll('span[email], div[email], span.vN');
-    spans.forEach(span => {
-      const email = span.getAttribute('email') || span.textContent;
-      if (email && email.includes('@')) {
-        const match = email.match(/[\w.-]+@[\w.-]+\.\w+/);
-        if (match) recipients.push(match[0]);
+    const hovercardElements = composeWindow.querySelectorAll('[data-hovercard-id]');
+    hovercardElements.forEach(el => {
+      const id = el.getAttribute('data-hovercard-id');
+      if (id && id.includes('@')) {
+        recipients.push(id);
       }
     });
   }
 
+  // Method 3: Parse the "To" field text for email patterns
+  if (recipients.length === 0) {
+    const toContainer = composeWindow.querySelector('[aria-label="To recipients"]') ||
+                        composeWindow.querySelector('[name="to"]')?.closest('div');
+    if (toContainer) {
+      const text = toContainer.textContent || '';
+      const matches = text.match(/[\w.-]+@[\w.-]+\.\w+/g);
+      if (matches) {
+        recipients.push(...matches);
+      }
+    }
+  }
+
+  console.log('Mailtrack: Found recipients:', recipients);
   return [...new Set(recipients)];
 }
 
@@ -141,10 +150,9 @@ async function insertTrackingPixel(composeBody, composeWindow) {
   selection.removeAllRanges();
   selection.addRange(range);
 
-  // Use a div with background-image CSS - this approach survives Gmail's sanitization
-  // Gmail strips custom data attributes but preserves inline styles with background-image
-  // The 1x1 dimensions and display:block ensure it loads but is invisible
-  const pixelHtml = `<div style="background-image:url('${track.pixel_url}');width:1px;height:1px;display:block;font-size:0;line-height:0;overflow:hidden;" data-mailtrack="${track.id}"></div>`;
+  // Use a simple img tag - Gmail allows external images
+  // Keep it minimal: just src, width, height - no custom attributes that Gmail might strip
+  const pixelHtml = `<img src="${track.pixel_url}" width="1" height="1" style="display:block">`;
 
   const success = document.execCommand('insertHTML', false, pixelHtml);
 
