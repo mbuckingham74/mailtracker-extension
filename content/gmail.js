@@ -69,13 +69,10 @@ function hasTrackingPixel(element) {
 function extractRecipients(composeWindow) {
   const recipients = new Set();
 
-  // Strategy: Find elements with [email] attribute that are INSIDE the header area
-  // but NOT inside dropdown/suggestion containers
+  // Strategy: Find elements with [email] attribute
+  // EXCLUDE only those in suggestion dropdowns (role="listbox")
+  // This is more permissive - we accept any email chip that's not a suggestion
 
-  // The compose header contains To/CC/BCC rows
-  // Suggestions appear in elements with role="listbox" or similar
-
-  // First, find all elements with [email] attribute
   const allEmailElements = composeWindow.querySelectorAll('[email]');
   console.log('Mailtrack: Found', allEmailElements.length, 'elements with [email] attribute');
 
@@ -83,39 +80,23 @@ function extractRecipients(composeWindow) {
     const email = el.getAttribute('email');
     if (!email || !email.includes('@')) return;
 
-    // Exclude if inside a listbox (suggestions dropdown)
+    // Log element details for debugging
+    console.log('Mailtrack: Checking email:', email);
+    console.log('  - tagName:', el.tagName);
+    console.log('  - className:', el.className);
+    console.log('  - has data-name:', el.hasAttribute('data-name'));
+    console.log('  - in listbox:', !!el.closest('[role="listbox"]'));
+
+    // ONLY exclude if inside a listbox (suggestions dropdown)
+    // The listbox is the dropdown that appears while typing
     if (el.closest('[role="listbox"]')) {
-      console.log('Mailtrack: Skipping (in listbox):', email);
+      console.log('Mailtrack: Skipping (in suggestion listbox):', email);
       return;
     }
 
-    // Exclude if inside autocomplete suggestions
-    if (el.closest('[role="presentation"]') && !el.closest('[role="option"]')) {
-      console.log('Mailtrack: Skipping (in presentation):', email);
-      return;
-    }
-
-    // Check if this looks like a selected chip (has specific Gmail chip classes/structure)
-    // Selected chips typically have data-name attribute or are inside a specific structure
-    const isChip = el.hasAttribute('data-name') ||
-                   el.closest('[data-name]') ||
-                   el.closest('.afV') ||  // Gmail chip container class
-                   el.getAttribute('tabindex') === '0';
-
-    if (isChip) {
-      console.log('Mailtrack: Found recipient chip:', email);
-      recipients.add(email);
-    } else {
-      // Also accept if it's in a row that contains "To", "Cc", or "Bcc" text
-      const row = el.closest('tr') || el.closest('[role="group"]') || el.parentElement?.parentElement?.parentElement;
-      if (row) {
-        const rowText = row.textContent?.toLowerCase() || '';
-        if (rowText.includes('to') || rowText.includes('cc') || rowText.includes('bcc')) {
-          console.log('Mailtrack: Found recipient in header row:', email);
-          recipients.add(email);
-        }
-      }
-    }
+    // Accept this email
+    console.log('Mailtrack: Accepting recipient:', email);
+    recipients.add(email);
   });
 
   const result = [...recipients];
