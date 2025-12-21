@@ -69,55 +69,47 @@ function hasTrackingPixel(element) {
 function extractRecipients(composeWindow) {
   const recipients = new Set();
 
-  // Method 1: Look for email chips/pills with email attribute (most reliable)
-  const emailChips = composeWindow.querySelectorAll('[email]');
-  console.log('Mailtrack: Method 1 - Found', emailChips.length, 'elements with [email] attribute');
-  emailChips.forEach(chip => {
-    const email = chip.getAttribute('email');
-    if (email && email.includes('@')) {
-      console.log('Mailtrack: Method 1 - Adding recipient:', email);
-      recipients.add(email);
-    }
-  });
-
-  // Method 2: Look for data-hovercard-id containing @ (always check, don't skip)
-  const hovercardElements = composeWindow.querySelectorAll('[data-hovercard-id]');
-  console.log('Mailtrack: Method 2 - Found', hovercardElements.length, 'elements with [data-hovercard-id]');
-  hovercardElements.forEach(el => {
-    const id = el.getAttribute('data-hovercard-id');
-    if (id && id.includes('@')) {
-      console.log('Mailtrack: Method 2 - Adding recipient:', id);
-      recipients.add(id);
-    }
-  });
-
-  // Method 3: Parse the "To" field text for email patterns (always check)
+  // Find the actual recipient input containers (To, CC, BCC)
+  // These are the only places we should look to avoid picking up suggestions/recent contacts
   const toContainer = composeWindow.querySelector('[aria-label="To recipients"]') ||
                       composeWindow.querySelector('[name="to"]')?.closest('div');
-  if (toContainer) {
-    const text = toContainer.textContent || '';
-    console.log('Mailtrack: Method 3 - To field text:', text);
-    const matches = text.match(/[\w.-]+@[\w.-]+\.\w+/g);
-    if (matches) {
-      matches.forEach(email => {
-        console.log('Mailtrack: Method 3 - Adding recipient:', email);
-        recipients.add(email);
-      });
-    }
-  }
-
-  // Method 4: Look in CC and BCC fields too
   const ccContainer = composeWindow.querySelector('[aria-label="Cc recipients"]');
   const bccContainer = composeWindow.querySelector('[aria-label="Bcc recipients"]');
-  [ccContainer, bccContainer].forEach(container => {
-    if (container) {
-      container.querySelectorAll('[email]').forEach(chip => {
-        const email = chip.getAttribute('email');
-        if (email && email.includes('@')) {
-          console.log('Mailtrack: Method 4 (CC/BCC) - Adding recipient:', email);
+
+  const containers = [toContainer, ccContainer, bccContainer].filter(Boolean);
+  console.log('Mailtrack: Found', containers.length, 'recipient containers');
+
+  containers.forEach((container, idx) => {
+    const containerName = ['To', 'CC', 'BCC'][idx];
+
+    // Method 1: Look for email chips with [email] attribute within container
+    container.querySelectorAll('[email]').forEach(chip => {
+      const email = chip.getAttribute('email');
+      if (email && email.includes('@')) {
+        console.log(`Mailtrack: ${containerName} - Found chip:`, email);
+        recipients.add(email);
+      }
+    });
+
+    // Method 2: Look for data-hovercard-id within container
+    container.querySelectorAll('[data-hovercard-id]').forEach(el => {
+      const id = el.getAttribute('data-hovercard-id');
+      if (id && id.includes('@')) {
+        console.log(`Mailtrack: ${containerName} - Found hovercard:`, id);
+        recipients.add(id);
+      }
+    });
+
+    // Method 3: Parse text content for email patterns (fallback)
+    if (recipients.size === 0) {
+      const text = container.textContent || '';
+      const matches = text.match(/[\w.-]+@[\w.-]+\.\w+/g);
+      if (matches) {
+        matches.forEach(email => {
+          console.log(`Mailtrack: ${containerName} - Found in text:`, email);
           recipients.add(email);
-        }
-      });
+        });
+      }
     }
   });
 
