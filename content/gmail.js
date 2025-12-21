@@ -141,26 +141,17 @@ async function insertTrackingPixels(composeBody, composeWindow) {
     const track = await createTrackingPixel(recipient, subject, messageGroupId);
 
     if (track) {
-      // Create the tracking pixel element
-      // IMPORTANT: We use a data attribute for the real URL to prevent the browser
-      // from loading the image during composition. The src is set to a tiny
-      // transparent data URI. When Gmail serializes the email, we intercept and
-      // swap the src before sending.
-      const pixelImg = document.createElement('img');
-      pixelImg.width = 1;
-      pixelImg.height = 1;
-      pixelImg.style.display = 'none';
-      pixelImg.alt = '';
-      pixelImg.dataset.mailtrackId = track.id;
-      pixelImg.dataset.mailtrackRecipient = recipient;
-      pixelImg.dataset.mailtrackSrc = track.pixel_url; // Store real URL here
-      // Use a tiny transparent GIF data URI as placeholder (won't trigger server request)
-      pixelImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      // Create a hidden div that stores the pixel URL but doesn't load it
+      // We'll inject the actual img HTML via innerHTML right at send time
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'display:none;font-size:0;line-height:0;height:0;overflow:hidden;';
+      wrapper.dataset.mailtrackId = track.id;
+      wrapper.dataset.mailtrackRecipient = recipient;
+      wrapper.dataset.mailtrackUrl = track.pixel_url;
 
-      // Insert at the end of the email body
-      composeBody.appendChild(pixelImg);
+      composeBody.appendChild(wrapper);
 
-      console.log('Mailtrack: Inserted tracking pixel for', recipient || '(unknown)', track.id);
+      console.log('Mailtrack: Inserted tracking pixel placeholder for', recipient || '(unknown)', track.id);
       successCount++;
     }
   }
@@ -168,24 +159,27 @@ async function insertTrackingPixels(composeBody, composeWindow) {
   return successCount > 0;
 }
 
-// Check if a compose body has a tracking pixel
+// Check if a compose body has a tracking pixel (either pending or activated)
 function hasTrackingPixel(element) {
-  return element.querySelector('img[data-mailtrack-id]') !== null;
+  return element.querySelector('div[data-mailtrack-id]') !== null ||
+         element.querySelector('img[data-mailtrack-id]') !== null;
 }
 
-// Activate tracking pixels by swapping data-mailtrack-src to src
+// Activate tracking pixels by injecting actual img HTML
 // This must be called right before Gmail sends the email
 function activateTrackingPixels(composeBody) {
-  const pixels = composeBody.querySelectorAll('img[data-mailtrack-src]');
-  pixels.forEach(pixel => {
-    const realSrc = pixel.dataset.mailtrackSrc;
-    if (realSrc) {
-      pixel.src = realSrc;
-      delete pixel.dataset.mailtrackSrc; // Clean up the data attribute
-      console.log('Mailtrack: Activated pixel', pixel.dataset.mailtrackId);
+  const wrappers = composeBody.querySelectorAll('div[data-mailtrack-url]');
+  wrappers.forEach(wrapper => {
+    const url = wrapper.dataset.mailtrackUrl;
+    if (url) {
+      // Inject the img tag - yes this will trigger a load, but it happens
+      // right as Gmail is sending. The key is the pixel IS in the email.
+      wrapper.innerHTML = `<img src="${url}" width="1" height="1" style="display:none" alt="">`;
+      delete wrapper.dataset.mailtrackUrl;
+      console.log('Mailtrack: Activated pixel', wrapper.dataset.mailtrackId);
     }
   });
-  return pixels.length;
+  return wrappers.length;
 }
 
 // Show notification badge
@@ -245,7 +239,7 @@ async function processComposeBody(composeBody) {
       sendButton.addEventListener('mousedown', async (e) => {
         // Check if pixels exist but haven't been activated yet
         const hasPixels = hasTrackingPixel(composeBody);
-        const hasInactivePixels = composeBody.querySelector('img[data-mailtrack-src]') !== null;
+        const hasInactivePixels = composeBody.querySelector('div[data-mailtrack-url]') !== null;
 
         if (hasPixels && !hasInactivePixels) {
           console.log('Mailtrack: Pixels already activated, allowing send');
