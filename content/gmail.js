@@ -67,17 +67,61 @@ function hasTrackingPixel(element) {
          element.innerHTML.includes('mailtrack.tachyonfuture.com');
 }
 
+// Extract recipient emails from Gmail's compose window
+function extractRecipients(composeWindow) {
+  const recipients = [];
+
+  // Method 1: Look for email chips/pills with email attribute
+  const emailChips = composeWindow.querySelectorAll('[email], [data-hovercard-id*="@"], [data-email]');
+  emailChips.forEach(chip => {
+    const email = chip.getAttribute('email') ||
+                  chip.getAttribute('data-email') ||
+                  chip.getAttribute('data-hovercard-id');
+    if (email && email.includes('@')) {
+      recipients.push(email);
+    }
+  });
+
+  // Method 2: Look for spans with email class
+  if (recipients.length === 0) {
+    const spans = composeWindow.querySelectorAll('span[email], div[email], span.vN');
+    spans.forEach(span => {
+      const email = span.getAttribute('email') || span.textContent;
+      if (email && email.includes('@')) {
+        const match = email.match(/[\w.-]+@[\w.-]+\.\w+/);
+        if (match) recipients.push(match[0]);
+      }
+    });
+  }
+
+  return [...new Set(recipients)];
+}
+
+// Extract subject from Gmail's compose window
+function extractSubject(composeWindow) {
+  const subjectInput = composeWindow.querySelector('input[name="subjectbox"]') ||
+                       composeWindow.querySelector('input[aria-label="Subject"]');
+  return subjectInput?.value || '';
+}
+
 // Insert tracking pixel into compose body using execCommand
 // Using div with background-image CSS which survives Gmail's sanitization better than img tags
-async function insertTrackingPixel(composeBody) {
+async function insertTrackingPixel(composeBody, composeWindow) {
   if (hasTrackingPixel(composeBody)) {
     console.log('Mailtrack: Pixel already exists, skipping');
     return false;
   }
 
+  // Extract recipient and subject from compose window
+  const recipients = extractRecipients(composeWindow);
+  const subject = extractSubject(composeWindow);
+  const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+
+  console.log('Mailtrack: Extracted recipient:', recipient, 'subject:', subject);
+
   // Create a single tracking pixel for this email
   const messageGroupId = generateUUID();
-  const track = await createTrackingPixel('', '', messageGroupId);
+  const track = await createTrackingPixel(recipient, subject, messageGroupId);
 
   if (!track) {
     console.error('Mailtrack: Failed to create tracking pixel');
@@ -193,7 +237,7 @@ async function processComposeBody(composeBody) {
         e.stopImmediatePropagation();
 
         // Insert pixel now
-        const success = await insertTrackingPixel(composeBody);
+        const success = await insertTrackingPixel(composeBody, composeWindow);
         console.log('Mailtrack: Pixel insertion result:', success);
 
         // Trigger send after brief delay
