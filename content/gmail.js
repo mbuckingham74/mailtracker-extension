@@ -341,6 +341,19 @@ window.addEventListener('mailtrack-pixel-injected', function(e) {
 });
 
 // Initialize
-console.log('Mailtrack: Content script loaded');
+console.log('Mailtrack: Content script loaded at', new Date().toISOString());
+console.log('Mailtrack: Document readyState:', document.readyState);
+
+// Inject XHR interceptor immediately
 injectXHRInterceptor();
-observeComposeWindows();
+
+// Start observing when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('Mailtrack: DOMContentLoaded fired');
+    observeComposeWindows();
+  });
+} else {
+  console.log('Mailtrack: DOM already ready, starting observer');
+  observeComposeWindows();
+}

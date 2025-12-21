@@ -26,22 +26,36 @@
 
   // Helper to detect if this is a Gmail send request
   function isGmailSendRequest(url, body) {
+    const urlStr = url.toString();
+
+    // Log ALL POST requests to find the send pattern
+    if (body && typeof body === 'string' && body.length > 100) {
+      // Check if body contains HTML content (likely an email)
+      if (body.includes('<div') || body.includes('</div>')) {
+        console.log('Mailtrack XHR: Found HTML in request body');
+        console.log('Mailtrack XHR: URL:', urlStr);
+        console.log('Mailtrack XHR: Body preview:', body.substring(0, 1000));
+        return true;
+      }
+    }
+
     // Gmail send requests go to specific endpoints
     const sendPatterns = [
       '/mail/u/0/?', // Gmail send URL pattern
       'act=sm',      // Send mail action
-      'sync/u/0/i/s' // Newer Gmail sync endpoint
     ];
 
-    const urlStr = url.toString();
     const isSendUrl = sendPatterns.some(pattern => urlStr.includes(pattern));
 
     // Also check if body contains email content indicators
     if (body && typeof body === 'string') {
       const hasEmailContent = body.includes('body=') ||
-                              body.includes('composeid=') ||
-                              body.includes('subject=');
-      return isSendUrl || hasEmailContent;
+                              body.includes('composeid=');
+      if (hasEmailContent) {
+        console.log('Mailtrack XHR: Found email content in body');
+        console.log('Mailtrack XHR: Body preview:', body.substring(0, 1000));
+        return true;
+      }
     }
 
     return isSendUrl;
