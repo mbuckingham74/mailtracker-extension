@@ -165,32 +165,50 @@ function hasTrackingPixel(element) {
          element.querySelector('img[data-mailtrack-id]') !== null;
 }
 
-// Activate tracking pixels by replacing wrapper with img element
-// This must be called right before Gmail sends the email
+// Activate tracking pixels by inserting img via execCommand
+// This makes Gmail treat it as user-typed content that gets included in the sent email
 function activateTrackingPixels(composeBody) {
   const wrappers = composeBody.querySelectorAll('div[data-mailtrack-url]');
-  let count = 0;
+  if (wrappers.length === 0) return 0;
+
+  // Collect all pixel data first before removing elements
+  const pixels = [];
   wrappers.forEach(wrapper => {
     const url = wrapper.dataset.mailtrackUrl;
     const trackId = wrapper.dataset.mailtrackId;
     if (url) {
-      // Create img element directly (not as innerHTML) and replace the wrapper
-      // Using minimal styling that email clients won't strip
-      const img = document.createElement('img');
-      img.src = url;
-      img.width = 1;
-      img.height = 1;
-      img.alt = '';
-      img.style.cssText = 'width:1px!important;height:1px!important;border:0!important;margin:0!important;padding:0!important;';
-
-      // Replace the wrapper div with just the img
-      wrapper.parentNode.replaceChild(img, wrapper);
-
-      console.log('Mailtrack: Activated pixel', trackId);
-      count++;
+      pixels.push({ url, trackId });
     }
   });
-  return count;
+
+  if (pixels.length === 0) return 0;
+
+  // Remove placeholder wrappers
+  wrappers.forEach(w => w.remove());
+
+  // Focus the compose body
+  composeBody.focus();
+
+  // Build pixel HTML - using minimal attributes that survive Gmail's sanitization
+  const pixelHtml = pixels.map(p =>
+    `<img src="${p.url}" width="1" height="1" alt="">`
+  ).join('');
+
+  // Move selection/cursor to end of compose body
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(composeBody);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  // Insert via execCommand - Gmail treats this as user-typed content
+  // This is the key: DOM manipulation gets stripped, but execCommand content is preserved
+  document.execCommand('insertHTML', false, pixelHtml);
+
+  pixels.forEach(p => console.log('Mailtrack: Activated pixel via execCommand', p.trackId));
+
+  return pixels.length;
 }
 
 // Show notification badge
