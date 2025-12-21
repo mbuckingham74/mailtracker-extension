@@ -165,21 +165,32 @@ function hasTrackingPixel(element) {
          element.querySelector('img[data-mailtrack-id]') !== null;
 }
 
-// Activate tracking pixels by injecting actual img HTML
+// Activate tracking pixels by replacing wrapper with img element
 // This must be called right before Gmail sends the email
 function activateTrackingPixels(composeBody) {
   const wrappers = composeBody.querySelectorAll('div[data-mailtrack-url]');
+  let count = 0;
   wrappers.forEach(wrapper => {
     const url = wrapper.dataset.mailtrackUrl;
+    const trackId = wrapper.dataset.mailtrackId;
     if (url) {
-      // Inject the img tag - yes this will trigger a load, but it happens
-      // right as Gmail is sending. The key is the pixel IS in the email.
-      wrapper.innerHTML = `<img src="${url}" width="1" height="1" style="display:none" alt="">`;
-      delete wrapper.dataset.mailtrackUrl;
-      console.log('Mailtrack: Activated pixel', wrapper.dataset.mailtrackId);
+      // Create img element directly (not as innerHTML) and replace the wrapper
+      // Using minimal styling that email clients won't strip
+      const img = document.createElement('img');
+      img.src = url;
+      img.width = 1;
+      img.height = 1;
+      img.alt = '';
+      img.style.cssText = 'width:1px!important;height:1px!important;border:0!important;margin:0!important;padding:0!important;';
+
+      // Replace the wrapper div with just the img
+      wrapper.parentNode.replaceChild(img, wrapper);
+
+      console.log('Mailtrack: Activated pixel', trackId);
+      count++;
     }
   });
-  return wrappers.length;
+  return count;
 }
 
 // Show notification badge
