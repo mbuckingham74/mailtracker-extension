@@ -285,4 +285,10 @@
   };
 
   console.log('Mailtrack XHR Interceptor: Ready - XHR and Fetch intercepted');
+
+  // Set global flag so content script can check if we're ready (handles race condition)
+  window.__mailtrackInterceptorReady = true;
+
+  // Also signal via event (in case content script listener is already set up)
+  window.dispatchEvent(new CustomEvent('mailtrack-interceptor-ready'));
 })();

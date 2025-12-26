@@ -11,6 +11,25 @@ const processedComposeWindows = new WeakSet();
 // Track pending pixels for XHR injection
 const pendingPixels = new Map();
 
+// Track if XHR interceptor is ready
+let xhrInterceptorReady = false;
+
+// Function to check if interceptor is ready (checks global variable set by interceptor)
+function checkInterceptorReady() {
+  // The XHR interceptor sets this global when it loads
+  if (window.__mailtrackInterceptorReady) {
+    xhrInterceptorReady = true;
+    return true;
+  }
+  return xhrInterceptorReady;
+}
+
+// Listen for XHR interceptor ready signal
+window.addEventListener('mailtrack-interceptor-ready', function() {
+  console.log('Mailtrack: XHR interceptor confirmed ready via event');
+  xhrInterceptorReady = true;
+});
+
 // Get settings from storage
 async function getSettings() {
   return chrome.storage.sync.get({
@@ -242,7 +261,15 @@ async function processComposeBody(composeBody) {
     if (sendButton && !sendButton.dataset.mailtrackIntercepted) {
       sendButton.dataset.mailtrackIntercepted = 'true';
       console.log('Mailtrack: Intercepting send button');
-      showInsertedBadge(composeWindow, true);
+
+      // Only show "Tracking" badge if XHR interceptor is confirmed ready
+      // Check both the event-based flag AND the global variable (in case event fired before listener)
+      if (checkInterceptorReady()) {
+        showInsertedBadge(composeWindow, true);
+      } else {
+        console.warn('Mailtrack: XHR interceptor not ready, badge will show error');
+        showInsertedBadge(composeWindow, false);
+      }
 
       // Intercept mousedown (before click) - signal XHR interceptor to wait
       sendButton.addEventListener('mousedown', async (e) => {
