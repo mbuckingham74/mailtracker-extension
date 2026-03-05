@@ -303,6 +303,33 @@ async function processComposeBody(composeBody) {
     }
   };
 
+  // Intercept keyboard send (Ctrl+Enter / Cmd+Enter)
+  const handleKeyboardSend = async (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      console.log('Mailtrack: Keyboard send detected (Ctrl/Cmd+Enter)');
+
+      // Signal XHR interceptor to wait
+      window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
+
+      // Prepare pixel if not already done
+      if (!pixelPrepared) {
+        await preparePixelNow();
+      } else if (currentTrack) {
+        const recipients = extractRecipients(composeWindow);
+        const subject = extractSubject(composeWindow);
+        const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+        sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
+      }
+    }
+  };
+
+  // Add keyboard listener to the compose body
+  composeBody.addEventListener('keydown', handleKeyboardSend, { capture: true });
+  // Also listen on the compose window for subject field Ctrl+Enter
+  if (composeWindow) {
+    composeWindow.addEventListener('keydown', handleKeyboardSend, { capture: true });
+  }
+
   // Try to find send button now and watch for it
   findAndInterceptSendButton();
 
