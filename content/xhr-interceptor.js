@@ -169,16 +169,22 @@
     const xhr = this;
 
     if (this._mtMethod === 'POST' && body && shouldIntercept()) {
+      const bodyType = typeof body === 'string' ? 'string' : body?.constructor?.name || typeof body;
+      const bodyLen = typeof body === 'string' ? body.length : body?.byteLength || body?.size || '?';
+      console.log(`Mailtrack XHR: POST ${(this._mtUrl || '').toString().substring(0, 100)} | ${bodyType}(${bodyLen})`);
+
       // If still waiting for pixel, delay until ready
       if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
         waitForPixel(2000).then(() => {
           const result = tryProcessBody(body);
+          if (result.modified) console.log('Mailtrack XHR: Pixel injected (delayed)');
           originalXHRSend.call(xhr, result.body);
         });
         return;
       }
 
       const result = tryProcessBody(body);
+      if (result.modified) console.log('Mailtrack XHR: Pixel injected');
       return originalXHRSend.call(this, result.body);
     }
 
@@ -213,6 +219,10 @@
     const isPost = (method || '').toUpperCase() === 'POST';
 
     if (isPost && shouldIntercept()) {
+      const bodyType = body ? (typeof body === 'string' ? 'string' : body?.constructor?.name || typeof body) : 'null';
+      const isReqObj = input instanceof Request && !init;
+      console.log(`Mailtrack Fetch: POST ${isReqObj ? input.url.substring(0, 100) : 'init-based'} | body=${bodyType} | Request=${isReqObj}`);
+
       // Wait for pixel if needed
       if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
         await waitForPixel(2000);

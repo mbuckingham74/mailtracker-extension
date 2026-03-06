@@ -185,6 +185,21 @@ async function prepareTrackingPixel(composeBody, composeWindow) {
   return track;
 }
 
+// Inject pixel directly into compose body DOM (primary injection method)
+function injectPixelIntoDom(composeBody, pixelUrl) {
+  try {
+    const img = document.createElement('img');
+    img.src = pixelUrl;
+    img.width = 1;
+    img.height = 1;
+    img.style.display = 'none';
+    composeBody.appendChild(img);
+    console.log('Mailtrack: Pixel injected into DOM');
+  } catch (e) {
+    console.error('Mailtrack: DOM injection failed:', e);
+  }
+}
+
 // Show notification badge
 function showInsertedBadge(composeWindow, success) {
   const existingBadge = composeWindow.querySelector('.mailtrack-badge');
@@ -271,34 +286,29 @@ async function processComposeBody(composeBody) {
         showInsertedBadge(composeWindow, false);
       }
 
-      // Intercept mousedown (before click) - signal XHR interceptor to wait
+      // Intercept mousedown (before click) - inject pixel into DOM + signal XHR interceptor
       sendButton.addEventListener('mousedown', async (e) => {
         console.log('Mailtrack: Send button clicked, preparing pixel...');
 
-        // IMMEDIATELY signal XHR interceptor to wait for pixel
-        // This must happen synchronously before Gmail's click handler fires
+        // IMMEDIATELY signal XHR interceptor to wait for pixel (backup method)
         window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
-        console.log('Mailtrack: Sent prepare-send signal to XHR interceptor');
 
-        // DON'T block the event - let Gmail proceed
-        // The XHR interceptor will delay the actual network request until pixel is ready
-
-        // Prepare the tracking pixel (async, but XHR interceptor is waiting)
+        // Prepare the tracking pixel
         if (!pixelPrepared) {
           await preparePixelNow();
-        } else {
-          // Re-send to interceptor in case it was cleared
-          if (currentTrack) {
-            const recipients = extractRecipients(composeWindow);
-            const subject = extractSubject(composeWindow);
-            const recipient = recipients.length > 0 ? recipients.join(', ') : '';
-            sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
-            console.log('Mailtrack: Re-sent pixel to interceptor:', currentTrack.id);
-          }
+        } else if (currentTrack) {
+          const recipients = extractRecipients(composeWindow);
+          const subject = extractSubject(composeWindow);
+          const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+          sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
         }
 
-        console.log('Mailtrack: Pixel ready, XHR interceptor will inject it');
+        // PRIMARY: Inject pixel directly into compose body DOM
+        if (currentTrack) {
+          injectPixelIntoDom(composeBody, currentTrack.pixel_url);
+        }
 
+        console.log('Mailtrack: Pixel ready (DOM + XHR backup)');
       }, { capture: true });
     }
   };
@@ -308,10 +318,8 @@ async function processComposeBody(composeBody) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       console.log('Mailtrack: Keyboard send detected (Ctrl/Cmd+Enter)');
 
-      // Signal XHR interceptor to wait
       window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
 
-      // Prepare pixel if not already done
       if (!pixelPrepared) {
         await preparePixelNow();
       } else if (currentTrack) {
@@ -319,6 +327,10 @@ async function processComposeBody(composeBody) {
         const subject = extractSubject(composeWindow);
         const recipient = recipients.length > 0 ? recipients.join(', ') : '';
         sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
+      }
+
+      if (currentTrack) {
+        injectPixelIntoDom(composeBody, currentTrack.pixel_url);
       }
     }
   };
