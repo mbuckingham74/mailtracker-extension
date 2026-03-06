@@ -150,27 +150,51 @@
     return originalXHROpen.apply(this, [method, url, ...args]);
   };
 
+  // Try to decode a Uint8Array/ArrayBuffer body as text and inject pixel
+  function tryInjectBinary(body) {
+    try {
+      const bytes = body instanceof ArrayBuffer ? new Uint8Array(body) : body;
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      if (containsEmailHtml(text)) {
+        const result = tryInjectString(text);
+        if (result.modified) {
+          return { body: new TextEncoder().encode(result.body), modified: true };
+        }
+      }
+    } catch (e) { /* ignore decode errors */ }
+    return { body, modified: false };
+  }
+
   XMLHttpRequest.prototype.send = function(body) {
     const xhr = this;
 
     if (this._mtMethod === 'POST' && body && shouldIntercept()) {
-      // Only process string bodies for XHR (Gmail send uses string)
-      if (typeof body === 'string' && containsEmailHtml(body)) {
-        // If still waiting for pixel, delay
-        if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
-          waitForPixel(2000).then(() => {
-            const result = tryInjectString(body);
-            originalXHRSend.call(xhr, result.body);
-          });
-          return;
-        }
-        const result = tryInjectString(body);
-        return originalXHRSend.call(this, result.body);
+      // If still waiting for pixel, delay until ready
+      if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
+        waitForPixel(2000).then(() => {
+          const result = tryProcessBody(body);
+          originalXHRSend.call(xhr, result.body);
+        });
+        return;
       }
+
+      const result = tryProcessBody(body);
+      return originalXHRSend.call(this, result.body);
     }
 
     return originalXHRSend.call(this, body);
   };
+
+  // Process string or binary body for injection
+  function tryProcessBody(body) {
+    if (typeof body === 'string' && containsEmailHtml(body)) {
+      return tryInjectString(body);
+    }
+    if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
+      return tryInjectBinary(body);
+    }
+    return { body, modified: false };
+  }
 
   // --- Fetch Override ---
   const originalFetch = window.fetch;
@@ -235,9 +259,9 @@
         }
       }
 
-      // Handle init-based string bodies
-      if (typeof body === 'string' && containsEmailHtml(body)) {
-        const result = tryInjectString(body);
+      // Handle init-based bodies (string or binary)
+      if (body) {
+        const result = tryProcessBody(body);
         if (result.modified) {
           const options = { ...init, body: result.body };
           if (input instanceof Request) {
