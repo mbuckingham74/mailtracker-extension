@@ -193,11 +193,28 @@
 
   // Process string or binary body for injection
   function tryProcessBody(body) {
-    if (typeof body === 'string' && containsEmailHtml(body)) {
-      return tryInjectString(body);
+    if (typeof body === 'string') {
+      if (containsEmailHtml(body)) {
+        return tryInjectString(body);
+      }
+      // Log what IS in string bodies so we can understand Gmail's format
+      console.log('Mailtrack DEBUG: String body does NOT contain <div. Preview:', body.substring(0, 300));
+      console.log('Mailtrack DEBUG: String body end:', body.substring(Math.max(0, body.length - 300)));
+      return { body, modified: false };
     }
     if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
-      return tryInjectBinary(body);
+      const result = tryInjectBinary(body);
+      if (!result.modified) {
+        // Log decoded binary preview
+        try {
+          const text = new TextDecoder('utf-8', { fatal: false }).decode(
+            body instanceof ArrayBuffer ? new Uint8Array(body) : body
+          );
+          console.log('Mailtrack DEBUG: Binary body decoded preview:', text.substring(0, 300));
+          console.log('Mailtrack DEBUG: Binary body end:', text.substring(Math.max(0, text.length - 300)));
+        } catch (e) { /* ignore */ }
+      }
+      return result;
     }
     return { body, modified: false };
   }
