@@ -19,13 +19,11 @@
 
   window.addEventListener('mailtrack-inject-pixel', function(e) {
     const { pixelUrl, recipient, subject, messageId } = e.detail;
-    console.log('Mailtrack XHR: Received pixel to inject:', pixelUrl);
     window.__mailtrackPendingPixels[messageId] = { pixelUrl, recipient, subject };
     window.__mailtrackPixelReady = true;
   });
 
   window.addEventListener('mailtrack-prepare-send', function() {
-    console.log('Mailtrack XHR: Prepare-send signal received');
     window.__mailtrackWaitingForPixel = true;
     window.__mailtrackPixelReady = false;
     pixelInjectedThisSend = false;
@@ -106,7 +104,6 @@
     delete window.__mailtrackPendingPixels[messageId];
 
     if (modifiedBody !== body) {
-      console.log('Mailtrack XHR: Pixel injected successfully');
       markDone();
       window.dispatchEvent(new CustomEvent('mailtrack-pixel-injected', {
         detail: { messageId, success: true }
@@ -133,22 +130,11 @@
           resolve(true);
         } else if (Date.now() - start > maxWaitMs) {
           clearInterval(iv);
-          console.log('Mailtrack XHR: Timeout waiting for pixel');
           resolve(false);
         }
       }, 50);
     });
   }
-
-  // --- XHR Override ---
-  const originalXHROpen = XMLHttpRequest.prototype.open;
-  const originalXHRSend = XMLHttpRequest.prototype.send;
-
-  XMLHttpRequest.prototype.open = function(method, url, ...args) {
-    this._mtUrl = url;
-    this._mtMethod = method;
-    return originalXHROpen.apply(this, [method, url, ...args]);
-  };
 
   // Try to decode a Uint8Array/ArrayBuffer body as text and inject pixel
   function tryInjectBinary(body) {
@@ -165,59 +151,46 @@
     return { body, modified: false };
   }
 
+  // Process string or binary body for injection
+  function tryProcessBody(body) {
+    if (typeof body === 'string' && containsEmailHtml(body)) {
+      return tryInjectString(body);
+    }
+    if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
+      return tryInjectBinary(body);
+    }
+    return { body, modified: false };
+  }
+
+  // --- XHR Override ---
+  const originalXHROpen = XMLHttpRequest.prototype.open;
+  const originalXHRSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function(method, url, ...args) {
+    this._mtUrl = url;
+    this._mtMethod = method;
+    return originalXHROpen.apply(this, [method, url, ...args]);
+  };
+
   XMLHttpRequest.prototype.send = function(body) {
     const xhr = this;
 
     if (this._mtMethod === 'POST' && body && shouldIntercept()) {
-      const bodyType = typeof body === 'string' ? 'string' : body?.constructor?.name || typeof body;
-      const bodyLen = typeof body === 'string' ? body.length : body?.byteLength || body?.size || '?';
-      console.log(`Mailtrack XHR: POST ${(this._mtUrl || '').toString().substring(0, 100)} | ${bodyType}(${bodyLen})`);
-
       // If still waiting for pixel, delay until ready
       if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
         waitForPixel(2000).then(() => {
           const result = tryProcessBody(body);
-          if (result.modified) console.log('Mailtrack XHR: Pixel injected (delayed)');
           originalXHRSend.call(xhr, result.body);
         });
         return;
       }
 
       const result = tryProcessBody(body);
-      if (result.modified) console.log('Mailtrack XHR: Pixel injected');
       return originalXHRSend.call(this, result.body);
     }
 
     return originalXHRSend.call(this, body);
   };
-
-  // Process string or binary body for injection
-  function tryProcessBody(body) {
-    if (typeof body === 'string') {
-      if (containsEmailHtml(body)) {
-        return tryInjectString(body);
-      }
-      // Log what IS in string bodies so we can understand Gmail's format
-      console.log('Mailtrack DEBUG: String body does NOT contain <div. Preview:', body.substring(0, 300));
-      console.log('Mailtrack DEBUG: String body end:', body.substring(Math.max(0, body.length - 300)));
-      return { body, modified: false };
-    }
-    if (body instanceof ArrayBuffer || body instanceof Uint8Array) {
-      const result = tryInjectBinary(body);
-      if (!result.modified) {
-        // Log decoded binary preview
-        try {
-          const text = new TextDecoder('utf-8', { fatal: false }).decode(
-            body instanceof ArrayBuffer ? new Uint8Array(body) : body
-          );
-          console.log('Mailtrack DEBUG: Binary body decoded preview:', text.substring(0, 300));
-          console.log('Mailtrack DEBUG: Binary body end:', text.substring(Math.max(0, text.length - 300)));
-        } catch (e) { /* ignore */ }
-      }
-      return result;
-    }
-    return { body, modified: false };
-  }
 
   // --- Fetch Override ---
   const originalFetch = window.fetch;
@@ -236,10 +209,6 @@
     const isPost = (method || '').toUpperCase() === 'POST';
 
     if (isPost && shouldIntercept()) {
-      const bodyType = body ? (typeof body === 'string' ? 'string' : body?.constructor?.name || typeof body) : 'null';
-      const isReqObj = input instanceof Request && !init;
-      console.log(`Mailtrack Fetch: POST ${isReqObj ? input.url.substring(0, 100) : 'init-based'} | body=${bodyType} | Request=${isReqObj}`);
-
       // Wait for pixel if needed
       if (window.__mailtrackWaitingForPixel && !window.__mailtrackPixelReady) {
         await waitForPixel(2000);
@@ -303,7 +272,6 @@
     return originalFetch.call(this, input, init);
   };
 
-  console.log('Mailtrack XHR Interceptor: Ready');
   window.__mailtrackInterceptorReady = true;
   window.dispatchEvent(new CustomEvent('mailtrack-interceptor-ready'));
 })();
