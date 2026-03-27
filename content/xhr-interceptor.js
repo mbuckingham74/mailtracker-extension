@@ -29,6 +29,16 @@
     pixelInjectedThisSend = false;
   });
 
+  window.addEventListener('mailtrack-clear-pixel', function(e) {
+    const { messageId } = e.detail;
+    delete window.__mailtrackPendingPixels[messageId];
+
+    if (Object.keys(window.__mailtrackPendingPixels).length === 0) {
+      window.__mailtrackWaitingForPixel = false;
+      window.__mailtrackPixelReady = false;
+    }
+  });
+
   // Returns true if there's a pixel pending and we haven't injected yet
   function shouldIntercept() {
     if (pixelInjectedThisSend) return false;

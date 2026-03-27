@@ -10,6 +10,8 @@ const processedComposeWindows = new WeakSet();
 
 // Track pending pixels for XHR injection
 const pendingPixels = new Map();
+const pendingPixelCleanupTimers = new Map();
+const PENDING_PIXEL_TTL_MS = 30000;
 
 // Track if XHR interceptor is ready
 let xhrInterceptorReady = false;
@@ -90,7 +92,43 @@ function sendPixelToInterceptor(pixelUrl, recipient, subject, messageId) {
   window.dispatchEvent(new CustomEvent('mailtrack-inject-pixel', {
     detail: { pixelUrl, recipient, subject, messageId }
   }));
+  schedulePendingPixelCleanup(messageId);
   console.log('Mailtrack: Sent pixel to XHR interceptor:', messageId);
+}
+
+function clearPendingPixel(messageId, notifyInterceptor = true) {
+  pendingPixels.delete(messageId);
+
+  const cleanupTimer = pendingPixelCleanupTimers.get(messageId);
+  if (cleanupTimer) {
+    clearTimeout(cleanupTimer);
+    pendingPixelCleanupTimers.delete(messageId);
+  }
+
+  if (notifyInterceptor) {
+    window.dispatchEvent(new CustomEvent('mailtrack-clear-pixel', {
+      detail: { messageId }
+    }));
+  }
+}
+
+function schedulePendingPixelCleanup(messageId) {
+  const existingTimer = pendingPixelCleanupTimers.get(messageId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  const cleanupTimer = setTimeout(() => {
+    if (!pendingPixels.has(messageId)) {
+      pendingPixelCleanupTimers.delete(messageId);
+      return;
+    }
+
+    console.log('Mailtrack: Clearing stale pending pixel:', messageId);
+    clearPendingPixel(messageId);
+  }, PENDING_PIXEL_TTL_MS);
+
+  pendingPixelCleanupTimers.set(messageId, cleanupTimer);
 }
 
 // Create a new tracking pixel via background service worker
@@ -411,9 +449,7 @@ function observeComposeWindows() {
 window.addEventListener('mailtrack-pixel-injected', function(e) {
   const { messageId, success } = e.detail;
   console.log('Mailtrack: Received injection confirmation:', messageId, success);
-  if (pendingPixels.has(messageId)) {
-    pendingPixels.delete(messageId);
-  }
+  clearPendingPixel(messageId, false);
 });
 
 // Initialize
