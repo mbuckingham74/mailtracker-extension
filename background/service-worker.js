@@ -1,29 +1,20 @@
+importScripts('open-helpers.js');
+
 // Mailtrack Background Service Worker
 
 const API_BASE = 'https://mailtrack.tachyonfuture.com';
+const DASHBOARD_URL = 'https://mailtrack.tachyonfuture.com';
 const POLL_INTERVAL_MINUTES = 2;
 const ALARM_NAME = 'checkOpens';
 const OPEN_CHECK_OVERLAP_SECONDS = 30;
 const MAX_NOTIFIED_OPEN_IDS = 500;
-const OPEN_TIMESTAMP_FIELDS = ['opened_at', 'open_time', 'timestamp', 'created_at', 'time'];
+const OPEN_NOTIFICATION_BUTTONS = [{ title: 'Open Dashboard' }];
+const OPEN_NOTIFICATION_PREFIX = 'open-';
 
-function normalizeOpenTimestamp(value) {
-  if (value === null || value === undefined || value === '') {
-    return null;
-  }
-
-  const numericValue = Number(value);
-  if (Number.isFinite(numericValue)) {
-    return numericValue > 1e12 ? numericValue / 1000 : numericValue;
-  }
-
-  const parsedValue = Date.parse(value);
-  if (Number.isNaN(parsedValue)) {
-    return null;
-  }
-
-  return parsedValue / 1000;
-}
+const {
+  getOpenIdentity,
+  getLatestOpenTimestamp
+} = globalThis.mailtrackOpenHelpers;
 
 function ensurePollingAlarm() {
   chrome.alarms.get(ALARM_NAME, (alarm) => {
@@ -33,85 +24,25 @@ function ensurePollingAlarm() {
   });
 }
 
-function hashString(value) {
-  let hash = 2166136261;
-
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return (hash >>> 0).toString(16);
-}
-
-function getOpenTimestamp(open) {
-  for (const field of OPEN_TIMESTAMP_FIELDS) {
-    const parsedTimestamp = normalizeOpenTimestamp(open?.[field]);
-    if (parsedTimestamp !== null) {
-      return parsedTimestamp;
-    }
-  }
-
-  return null;
-}
-
-function getFallbackOpenFingerprint(open) {
-  const fingerprintEntries = Object.entries(open || {})
-    .filter(([field, value]) => (
-      field !== 'open_id' &&
-      !OPEN_TIMESTAMP_FIELDS.includes(field) &&
-      value !== undefined &&
-      value !== null &&
-      value !== ''
-    ))
-    .map(([field, value]) => [field, String(value)]);
-  const timestamp = getOpenTimestamp(open);
-
-  if (timestamp !== null) {
-    fingerprintEntries.push(['normalized_timestamp', String(timestamp)]);
-  }
-
-  fingerprintEntries.sort(([left], [right]) => left.localeCompare(right));
-
-  return hashString(
-    fingerprintEntries.map(([field, value]) => `${field}:${value}`).join('|') || 'unknown-open'
-  );
-}
-
-function getOpenIdentity(open) {
-  const openId = open?.open_id;
-  if (openId !== undefined && openId !== null && openId !== '') {
-    const key = String(openId);
-    return {
-      dedupeKey: key,
-      notificationId: `open-${key}`
-    };
-  }
-
-  const fingerprint = getFallbackOpenFingerprint(open);
-  return {
-    dedupeKey: `fingerprint:${fingerprint}`,
-    notificationId: `open-fallback-${fingerprint}`
-  };
-}
-
-function getLatestOpenTimestamp(opens, since) {
-  return opens.reduce((latest, open) => {
-    const openTimestamp = getOpenTimestamp(open);
-    if (openTimestamp !== null) {
-      return Math.max(latest, openTimestamp);
-    }
-
-    return latest;
-  }, since);
-}
-
 function trimRecentOpenIds(openIds) {
   return openIds.slice(-MAX_NOTIFIED_OPEN_IDS);
 }
 
 async function bumpOpenPollWatermark(timestamp = Date.now() / 1000) {
   await chrome.storage.local.set({ lastOpenCheck: timestamp });
+}
+
+function isOpenNotification(notificationId) {
+  return typeof notificationId === 'string' && notificationId.startsWith(OPEN_NOTIFICATION_PREFIX);
+}
+
+function openDashboardForNotification(notificationId) {
+  if (!isOpenNotification(notificationId)) {
+    return;
+  }
+
+  chrome.notifications.clear(notificationId);
+  chrome.tabs.create({ url: DASHBOARD_URL });
 }
 
 ensurePollingAlarm();
@@ -202,6 +133,7 @@ async function checkForNewOpens() {
         iconUrl: chrome.runtime.getURL('icons/icon128.png'),
         title: 'Email Opened!',
         message: `${open.recipient || 'Someone'} opened "${open.subject || '(no subject)'}"\n${location}`,
+        buttons: OPEN_NOTIFICATION_BUTTONS,
         priority: 2
       });
     }
@@ -217,6 +149,14 @@ async function checkForNewOpens() {
     console.error('Error checking for opens:', error);
   }
 }
+
+chrome.notifications.onClicked.addListener((notificationId) => {
+  openDashboardForNotification(notificationId);
+});
+
+chrome.notifications.onButtonClicked.addListener((notificationId) => {
+  openDashboardForNotification(notificationId);
+});
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'sync') {
