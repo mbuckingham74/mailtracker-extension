@@ -10,32 +10,59 @@
 
   // Store pending tracking pixels to inject
   window.__mailtrackPendingPixels = window.__mailtrackPendingPixels || {};
+  const SEND_ATTEMPT_TIMEOUT_MS = 10000;
 
   // Flags for coordinating with content script
   window.__mailtrackWaitingForPixel = false;
   window.__mailtrackPixelReady = false;
   // Set true once pixel is injected so we stop intercepting further requests
   let pixelInjectedThisSend = false;
+  let sendAttemptResetTimer = null;
+
+  function clearSendAttemptResetTimer() {
+    if (!sendAttemptResetTimer) return;
+    clearTimeout(sendAttemptResetTimer);
+    sendAttemptResetTimer = null;
+  }
+
+  function resetSendAttempt(clearPendingPixels = false) {
+    clearSendAttemptResetTimer();
+    window.__mailtrackWaitingForPixel = false;
+    window.__mailtrackPixelReady = false;
+    pixelInjectedThisSend = false;
+
+    if (clearPendingPixels) {
+      window.__mailtrackPendingPixels = {};
+    }
+  }
+
+  function scheduleSendAttemptReset() {
+    clearSendAttemptResetTimer();
+    sendAttemptResetTimer = setTimeout(() => {
+      resetSendAttempt(true);
+    }, SEND_ATTEMPT_TIMEOUT_MS);
+  }
 
   window.addEventListener('mailtrack-inject-pixel', function(e) {
     const { pixelUrl, recipient, subject, messageId } = e.detail;
     window.__mailtrackPendingPixels[messageId] = { pixelUrl, recipient, subject };
     window.__mailtrackPixelReady = true;
+    scheduleSendAttemptReset();
   });
 
   window.addEventListener('mailtrack-prepare-send', function() {
     window.__mailtrackWaitingForPixel = true;
     window.__mailtrackPixelReady = false;
     pixelInjectedThisSend = false;
+    scheduleSendAttemptReset();
   });
 
   window.addEventListener('mailtrack-clear-pixel', function(e) {
-    const { messageId } = e.detail;
+    const { messageId, keepWaiting } = e.detail;
     delete window.__mailtrackPendingPixels[messageId];
 
-    if (Object.keys(window.__mailtrackPendingPixels).length === 0) {
-      window.__mailtrackWaitingForPixel = false;
-      window.__mailtrackPixelReady = false;
+    if (Object.keys(window.__mailtrackPendingPixels).length === 0 && !keepWaiting) {
+      resetSendAttempt();
     }
   });
 
@@ -47,8 +74,10 @@
 
   // Mark injection complete and reset all flags
   function markDone() {
+    clearSendAttemptResetTimer();
     pixelInjectedThisSend = true;
     window.__mailtrackWaitingForPixel = false;
+    window.__mailtrackPixelReady = false;
   }
 
   // Check if a string body contains HTML email content

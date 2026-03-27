@@ -10,8 +10,6 @@ const processedComposeWindows = new WeakSet();
 
 // Track pending pixels for XHR injection
 const pendingPixels = new Map();
-const pendingPixelCleanupTimers = new Map();
-const PENDING_PIXEL_TTL_MS = 30000;
 
 // Track if XHR interceptor is ready
 let xhrInterceptorReady = false;
@@ -89,46 +87,21 @@ function injectXHRInterceptor() {
 
 // Send pixel data to the XHR interceptor in page context
 function sendPixelToInterceptor(pixelUrl, recipient, subject, messageId) {
+  pendingPixels.set(messageId, { pixelUrl, recipient, subject });
   window.dispatchEvent(new CustomEvent('mailtrack-inject-pixel', {
     detail: { pixelUrl, recipient, subject, messageId }
   }));
-  schedulePendingPixelCleanup(messageId);
   console.log('Mailtrack: Sent pixel to XHR interceptor:', messageId);
 }
 
-function clearPendingPixel(messageId, notifyInterceptor = true) {
+function clearPendingPixel(messageId, { notifyInterceptor = true, keepWaiting = false } = {}) {
   pendingPixels.delete(messageId);
-
-  const cleanupTimer = pendingPixelCleanupTimers.get(messageId);
-  if (cleanupTimer) {
-    clearTimeout(cleanupTimer);
-    pendingPixelCleanupTimers.delete(messageId);
-  }
 
   if (notifyInterceptor) {
     window.dispatchEvent(new CustomEvent('mailtrack-clear-pixel', {
-      detail: { messageId }
+      detail: { messageId, keepWaiting }
     }));
   }
-}
-
-function schedulePendingPixelCleanup(messageId) {
-  const existingTimer = pendingPixelCleanupTimers.get(messageId);
-  if (existingTimer) {
-    clearTimeout(existingTimer);
-  }
-
-  const cleanupTimer = setTimeout(() => {
-    if (!pendingPixels.has(messageId)) {
-      pendingPixelCleanupTimers.delete(messageId);
-      return;
-    }
-
-    console.log('Mailtrack: Clearing stale pending pixel:', messageId);
-    clearPendingPixel(messageId);
-  }, PENDING_PIXEL_TTL_MS);
-
-  pendingPixelCleanupTimers.set(messageId, cleanupTimer);
 }
 
 // Create a new tracking pixel via background service worker
@@ -204,12 +177,21 @@ function extractSubject(composeWindow) {
   return subjectInput?.value || '';
 }
 
-// Prepare tracking pixel for XHR injection (doesn't modify DOM)
-async function prepareTrackingPixel(composeBody, composeWindow) {
-  // Extract recipient and subject from compose window
+function getComposeDetails(composeWindow) {
   const recipients = extractRecipients(composeWindow);
   const subject = extractSubject(composeWindow);
   const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+  const signature = JSON.stringify({
+    recipients: [...recipients].map(email => email.trim().toLowerCase()).sort(),
+    subject
+  });
+
+  return { recipient, subject, signature };
+}
+
+// Prepare tracking pixel for XHR injection (doesn't modify DOM)
+async function prepareTrackingPixel(composeBody, composeWindow, composeDetails = getComposeDetails(composeWindow)) {
+  const { recipient, subject, signature } = composeDetails;
 
   console.log('Mailtrack: Extracted recipient:', recipient, 'subject:', subject);
 
@@ -227,12 +209,9 @@ async function prepareTrackingPixel(composeBody, composeWindow) {
   // Store the pixel data and send to XHR interceptor
   const messageId = messageGroupId;
   track.messageId = messageId;
-  pendingPixels.set(messageId, {
-    pixelUrl: track.pixel_url,
-    recipient,
-    subject,
-    trackId: track.id
-  });
+  track.composeSignature = signature;
+  track.recipient = recipient;
+  track.subject = subject;
 
   // Send to page context XHR interceptor
   sendPixelToInterceptor(track.pixel_url, recipient, subject, messageId);
@@ -243,12 +222,16 @@ async function prepareTrackingPixel(composeBody, composeWindow) {
 // Inject pixel directly into compose body DOM (primary injection method)
 function injectPixelIntoDom(composeBody, pixelUrl) {
   try {
-    const img = document.createElement('img');
+    let img = composeBody.querySelector('img[data-mailtrack-pixel="true"]');
+    if (!img) {
+      img = document.createElement('img');
+      img.dataset.mailtrackPixel = 'true';
+      composeBody.appendChild(img);
+    }
     img.src = pixelUrl;
     img.width = 1;
     img.height = 1;
     img.style.display = 'none';
-    composeBody.appendChild(img);
     console.log('Mailtrack: Pixel injected into DOM');
   } catch (e) {
     console.error('Mailtrack: DOM injection failed:', e);
@@ -301,25 +284,45 @@ async function processComposeBody(composeBody) {
   // Find the parent compose window/dialog
   const composeWindow = findComposeWindow(composeBody);
 
-  // Track if pixel has been prepared for this compose window
-  let pixelPrepared = false;
   let currentTrack = null;
+  let composeDisposed = false;
+  let buttonObserver = null;
+  let composeLifecycleObserver = null;
 
   // Function to prepare/update pixel with current recipient/subject
   const preparePixelNow = async () => {
-    const recipients = extractRecipients(composeWindow);
-    const subject = extractSubject(composeWindow);
-    const recipient = recipients.length > 0 ? recipients.join(', ') : '';
+    if (composeDisposed) {
+      return null;
+    }
 
-    // Only create new track if we don't have one, or if recipient/subject changed significantly
-    if (!currentTrack) {
-      console.log('Mailtrack: Preparing pixel for:', recipient, subject);
-      currentTrack = await prepareTrackingPixel(composeBody, composeWindow);
+    const composeDetails = getComposeDetails(composeWindow);
+    const needsNewTrack = !currentTrack || currentTrack.composeSignature !== composeDetails.signature;
+
+    if (needsNewTrack) {
+      if (currentTrack?.messageId) {
+        console.log('Mailtrack: Recipient or subject changed, refreshing tracking pixel');
+        clearPendingPixel(currentTrack.messageId, { keepWaiting: true });
+      }
+
+      console.log('Mailtrack: Preparing pixel for:', composeDetails.recipient, composeDetails.subject);
+      currentTrack = await prepareTrackingPixel(composeBody, composeWindow, composeDetails);
+      if (composeDisposed && currentTrack?.messageId) {
+        clearPendingPixel(currentTrack.messageId);
+        currentTrack = null;
+        return null;
+      }
       if (currentTrack) {
-        pixelPrepared = true;
         console.log('Mailtrack: Pixel prepared and sent to XHR interceptor:', currentTrack.id);
       }
+    } else if (currentTrack) {
+      sendPixelToInterceptor(
+        currentTrack.pixel_url,
+        composeDetails.recipient,
+        composeDetails.subject,
+        currentTrack.messageId
+      );
     }
+
     return currentTrack;
   };
 
@@ -350,14 +353,7 @@ async function processComposeBody(composeBody) {
         window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
 
         // Prepare the tracking pixel
-        if (!pixelPrepared) {
-          await preparePixelNow();
-        } else if (currentTrack) {
-          const recipients = extractRecipients(composeWindow);
-          const subject = extractSubject(composeWindow);
-          const recipient = recipients.length > 0 ? recipients.join(', ') : '';
-          sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.messageId);
-        }
+        await preparePixelNow();
 
         // PRIMARY: Inject pixel directly into compose body DOM
         if (currentTrack) {
@@ -376,19 +372,32 @@ async function processComposeBody(composeBody) {
 
       window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
 
-      if (!pixelPrepared) {
-        await preparePixelNow();
-      } else if (currentTrack) {
-        const recipients = extractRecipients(composeWindow);
-        const subject = extractSubject(composeWindow);
-        const recipient = recipients.length > 0 ? recipients.join(', ') : '';
-        sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.messageId);
-      }
+      await preparePixelNow();
 
       if (currentTrack) {
         injectPixelIntoDom(composeBody, currentTrack.pixel_url);
       }
     }
+  };
+
+  const cleanupComposeState = () => {
+    if (composeDisposed) {
+      return;
+    }
+
+    composeDisposed = true;
+
+    if (currentTrack?.messageId) {
+      clearPendingPixel(currentTrack.messageId);
+    }
+
+    composeBody.removeEventListener('keydown', handleKeyboardSend, true);
+    if (composeWindow) {
+      composeWindow.removeEventListener('keydown', handleKeyboardSend, true);
+    }
+
+    buttonObserver?.disconnect();
+    composeLifecycleObserver?.disconnect();
   };
 
   // Add keyboard listener to the compose body
@@ -401,15 +410,19 @@ async function processComposeBody(composeBody) {
   // Try to find send button now and watch for it
   findAndInterceptSendButton();
 
-  const buttonObserver = new MutationObserver(() => {
+  buttonObserver = new MutationObserver(() => {
     findAndInterceptSendButton();
   });
   if (composeWindow) {
     buttonObserver.observe(composeWindow, { childList: true, subtree: true });
   }
 
-  // Clean up observer after 30 seconds
-  setTimeout(() => buttonObserver.disconnect(), 30000);
+  composeLifecycleObserver = new MutationObserver(() => {
+    if (!composeBody.isConnected || (composeWindow && !composeWindow.isConnected)) {
+      cleanupComposeState();
+    }
+  });
+  composeLifecycleObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 // Main observer for compose windows
@@ -449,7 +462,7 @@ function observeComposeWindows() {
 window.addEventListener('mailtrack-pixel-injected', function(e) {
   const { messageId, success } = e.detail;
   console.log('Mailtrack: Received injection confirmation:', messageId, success);
-  clearPendingPixel(messageId, false);
+  clearPendingPixel(messageId, { notifyInterceptor: false });
 });
 
 // Initialize
