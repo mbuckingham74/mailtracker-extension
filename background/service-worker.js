@@ -110,6 +110,10 @@ function trimRecentOpenIds(openIds) {
   return openIds.slice(-MAX_NOTIFIED_OPEN_IDS);
 }
 
+async function bumpOpenPollWatermark(timestamp = Date.now() / 1000) {
+  await chrome.storage.local.set({ lastOpenCheck: timestamp });
+}
+
 ensurePollingAlarm();
 
 // Listen for installation
@@ -144,9 +148,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // Check for new opens and show notifications
 async function checkForNewOpens() {
-  const settings = await chrome.storage.sync.get(['apiKey', 'showNotification']);
+  const settings = await chrome.storage.sync.get({
+    apiKey: '',
+    enabled: true,
+    showNotification: true
+  });
 
-  if (!settings.apiKey || !settings.showNotification) {
+  if (!settings.apiKey || !settings.enabled || !settings.showNotification) {
+    await bumpOpenPollWatermark();
     return;
   }
 
@@ -208,6 +217,31 @@ async function checkForNewOpens() {
     console.error('Error checking for opens:', error);
   }
 }
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'sync') {
+    return;
+  }
+
+  if (!changes.apiKey && !changes.enabled && !changes.showNotification) {
+    return;
+  }
+
+  chrome.storage.sync.get({
+    apiKey: '',
+    enabled: true,
+    showNotification: true
+  })
+    .then((settings) => {
+      if (!settings.apiKey || !settings.enabled || !settings.showNotification) {
+        return bumpOpenPollWatermark();
+      }
+      return undefined;
+    })
+    .catch((error) => {
+      console.error('Error syncing poll watermark:', error);
+    });
+});
 
 // Handle messages from content script or popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
