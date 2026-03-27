@@ -101,9 +101,8 @@
       }
     }
 
-    delete window.__mailtrackPendingPixels[messageId];
-
     if (modifiedBody !== body) {
+      delete window.__mailtrackPendingPixels[messageId];
       markDone();
       window.dispatchEvent(new CustomEvent('mailtrack-pixel-injected', {
         detail: { messageId, success: true }

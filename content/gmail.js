@@ -188,6 +188,7 @@ async function prepareTrackingPixel(composeBody, composeWindow) {
 
   // Store the pixel data and send to XHR interceptor
   const messageId = messageGroupId;
+  track.messageId = messageId;
   pendingPixels.set(messageId, {
     pixelUrl: track.pixel_url,
     recipient,
@@ -317,7 +318,7 @@ async function processComposeBody(composeBody) {
           const recipients = extractRecipients(composeWindow);
           const subject = extractSubject(composeWindow);
           const recipient = recipients.length > 0 ? recipients.join(', ') : '';
-          sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
+          sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.messageId);
         }
 
         // PRIMARY: Inject pixel directly into compose body DOM
@@ -343,7 +344,7 @@ async function processComposeBody(composeBody) {
         const recipients = extractRecipients(composeWindow);
         const subject = extractSubject(composeWindow);
         const recipient = recipients.length > 0 ? recipients.join(', ') : '';
-        sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.id);
+        sendPixelToInterceptor(currentTrack.pixel_url, recipient, subject, currentTrack.messageId);
       }
 
       if (currentTrack) {
