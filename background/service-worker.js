@@ -146,6 +146,7 @@ async function checkForNewOpens() {
 
     const opens = await response.json();
     const seenOpenKeys = new Set(notifiedOpenIds);
+    let latestReturnedOpen = null;
     let latestNotifiedOpen = null;
     let newOpenCount = 0;
 
@@ -156,6 +157,7 @@ async function checkForNewOpens() {
 
     // Show notification for each new open, suppressing overlap duplicates.
     for (const open of opens) {
+      latestReturnedOpen = pickLatestOpen(latestReturnedOpen, open);
       const { dedupeKey, notificationId } = getOpenIdentity(open);
       if (seenOpenKeys.has(dedupeKey)) {
         continue;
@@ -184,7 +186,9 @@ async function checkForNewOpens() {
       lastOpenPollError: '',
       lastOpenPollNewCount: newOpenCount
     };
-    if (latestNotifiedOpen) {
+    if (latestReturnedOpen) {
+      pollStateUpdate.lastOpenSummary = buildOpenSummary(latestReturnedOpen);
+    } else if (latestNotifiedOpen) {
       pollStateUpdate.lastOpenSummary = buildOpenSummary(latestNotifiedOpen);
     }
 
