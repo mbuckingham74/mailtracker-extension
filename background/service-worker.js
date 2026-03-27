@@ -3,6 +3,8 @@
 const API_BASE = 'https://mailtrack.tachyonfuture.com';
 const POLL_INTERVAL_MINUTES = 2;
 const ALARM_NAME = 'checkOpens';
+const OPEN_CHECK_OVERLAP_SECONDS = 30;
+const MAX_NOTIFIED_OPEN_IDS = 500;
 
 function normalizeOpenTimestamp(value) {
   if (value === null || value === undefined || value === '') {
@@ -35,6 +37,10 @@ function getLatestOpenTimestamp(opens, since) {
 
     return latest;
   }, since);
+}
+
+function trimRecentOpenIds(openIds) {
+  return openIds.slice(-MAX_NOTIFIED_OPEN_IDS);
 }
 
 // Listen for installation
@@ -72,8 +78,13 @@ async function checkForNewOpens() {
     return;
   }
 
-  const { lastOpenCheck } = await chrome.storage.local.get(['lastOpenCheck']);
-  const since = lastOpenCheck || (Date.now() / 1000 - 300); // Default to 5 min ago
+  const pollStartedAt = Date.now() / 1000;
+  const { lastOpenCheck, notifiedOpenIds = [] } = await chrome.storage.local.get([
+    'lastOpenCheck',
+    'notifiedOpenIds'
+  ]);
+  const watermark = lastOpenCheck || (pollStartedAt - 300); // Default to 5 min ago
+  const since = Math.max(0, watermark - OPEN_CHECK_OVERLAP_SECONDS);
 
   try {
     const response = await fetch(`${API_BASE}/api/opens/recent?since=${since}`, {
@@ -88,11 +99,24 @@ async function checkForNewOpens() {
     }
 
     const opens = await response.json();
+    const seenOpenIds = new Set(notifiedOpenIds);
 
-    const nextOpenCheck = getLatestOpenTimestamp(opens, since);
+    const latestOpenTimestamp = getLatestOpenTimestamp(opens, watermark);
+    const nextOpenCheck = latestOpenTimestamp > watermark
+      ? latestOpenTimestamp
+      : (opens.length > 0 ? pollStartedAt : watermark);
 
-    // Show notification for each new open
+    // Show notification for each new open, suppressing overlap duplicates.
     for (const open of opens) {
+      const openId = open?.open_id;
+      if (openId !== undefined && openId !== null) {
+        const openIdKey = String(openId);
+        if (seenOpenIds.has(openIdKey)) {
+          continue;
+        }
+        seenOpenIds.add(openIdKey);
+      }
+
       const location = [open.city, open.country].filter(Boolean).join(', ') || 'Unknown location';
 
       chrome.notifications.create(`open-${open.open_id}`, {
@@ -104,9 +128,12 @@ async function checkForNewOpens() {
       });
     }
 
-    // Advance the watermark to the newest returned open time so we do not
-    // skip opens that happen while this poll is still in flight.
-    await chrome.storage.local.set({ lastOpenCheck: nextOpenCheck });
+    // Prefer the newest returned open time; if the payload does not expose a
+    // parseable timestamp, fall back to poll start plus a small overlap window.
+    await chrome.storage.local.set({
+      lastOpenCheck: nextOpenCheck,
+      notifiedOpenIds: trimRecentOpenIds(Array.from(seenOpenIds))
+    });
 
   } catch (error) {
     console.error('Error checking for opens:', error);
