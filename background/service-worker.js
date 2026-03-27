@@ -4,6 +4,39 @@ const API_BASE = 'https://mailtrack.tachyonfuture.com';
 const POLL_INTERVAL_MINUTES = 2;
 const ALARM_NAME = 'checkOpens';
 
+function normalizeOpenTimestamp(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) {
+    return numericValue > 1e12 ? numericValue / 1000 : numericValue;
+  }
+
+  const parsedValue = Date.parse(value);
+  if (Number.isNaN(parsedValue)) {
+    return null;
+  }
+
+  return parsedValue / 1000;
+}
+
+function getLatestOpenTimestamp(opens, since) {
+  const timestampFields = ['opened_at', 'open_time', 'timestamp', 'created_at', 'time'];
+
+  return opens.reduce((latest, open) => {
+    for (const field of timestampFields) {
+      const parsedTimestamp = normalizeOpenTimestamp(open?.[field]);
+      if (parsedTimestamp !== null) {
+        return Math.max(latest, parsedTimestamp);
+      }
+    }
+
+    return latest;
+  }, since);
+}
+
 // Listen for installation
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
@@ -56,6 +89,8 @@ async function checkForNewOpens() {
 
     const opens = await response.json();
 
+    const nextOpenCheck = getLatestOpenTimestamp(opens, since);
+
     // Show notification for each new open
     for (const open of opens) {
       const location = [open.city, open.country].filter(Boolean).join(', ') || 'Unknown location';
@@ -69,8 +104,9 @@ async function checkForNewOpens() {
       });
     }
 
-    // Update last check timestamp
-    chrome.storage.local.set({ lastOpenCheck: Date.now() / 1000 });
+    // Advance the watermark to the newest returned open time so we do not
+    // skip opens that happen while this poll is still in flight.
+    await chrome.storage.local.set({ lastOpenCheck: nextOpenCheck });
 
   } catch (error) {
     console.error('Error checking for opens:', error);

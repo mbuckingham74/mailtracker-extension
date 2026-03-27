@@ -14,6 +14,12 @@ const pendingPixels = new Map();
 // Track if XHR interceptor is ready
 let xhrInterceptorReady = false;
 
+function findComposeWindow(element) {
+  return element?.closest('[role="dialog"], .nH.Hd, form') ||
+         element?.parentElement?.parentElement?.parentElement ||
+         null;
+}
+
 // Function to check if interceptor is ready (checks global variable set by interceptor)
 function checkInterceptorReady() {
   // The XHR interceptor sets this global when it loads
@@ -24,10 +30,20 @@ function checkInterceptorReady() {
   return xhrInterceptorReady;
 }
 
+function updateInterceptorBadges() {
+  document.querySelectorAll('[data-mailtrack-intercepted="true"]').forEach(sendButton => {
+    const composeWindow = findComposeWindow(sendButton);
+    if (composeWindow) {
+      showInsertedBadge(composeWindow, true);
+    }
+  });
+}
+
 // Listen for XHR interceptor ready signal
 window.addEventListener('mailtrack-interceptor-ready', function() {
   console.log('Mailtrack: XHR interceptor confirmed ready via event');
   xhrInterceptorReady = true;
+  updateInterceptorBadges();
 });
 
 // Get settings from storage
@@ -201,10 +217,18 @@ function injectPixelIntoDom(composeBody, pixelUrl) {
 }
 
 // Show notification badge
+function applyBadgeState(badge, success) {
+  badge.textContent = success ? '✓ Tracking' : '✗ No tracking';
+  badge.title = success ? 'Tracking pixel will be injected via XHR' : 'Failed to prepare tracking pixel';
+  badge.style.cssText = success
+    ? 'color: #27ae60; font-size: 12px; padding: 4px 8px;'
+    : 'color: #e74c3c; font-size: 12px; padding: 4px 8px;';
+}
+
 function showInsertedBadge(composeWindow, success) {
   const existingBadge = composeWindow.querySelector('.mailtrack-badge');
   if (existingBadge) {
-    existingBadge.innerHTML = success ? '✓ Tracking' : '✗ No tracking';
+    applyBadgeState(existingBadge, success);
     return;
   }
 
@@ -215,11 +239,7 @@ function showInsertedBadge(composeWindow, success) {
   if (toolbar) {
     const badge = document.createElement('div');
     badge.className = 'mailtrack-badge';
-    badge.innerHTML = success ? '✓ Tracking' : '✗ No tracking';
-    badge.title = success ? 'Tracking pixel will be injected via XHR' : 'Failed to prepare tracking pixel';
-    badge.style.cssText = success
-      ? 'color: #27ae60; font-size: 12px; padding: 4px 8px;'
-      : 'color: #e74c3c; font-size: 12px; padding: 4px 8px;';
+    applyBadgeState(badge, success);
     toolbar.appendChild(badge);
   }
 }
@@ -240,10 +260,7 @@ async function processComposeBody(composeBody) {
   console.log('Mailtrack: Found compose window');
 
   // Find the parent compose window/dialog
-  const composeWindow = composeBody.closest('[role="dialog"]') ||
-                        composeBody.closest('.nH.Hd') ||
-                        composeBody.closest('form') ||
-                        composeBody.parentElement?.parentElement?.parentElement;
+  const composeWindow = findComposeWindow(composeBody);
 
   // Track if pixel has been prepared for this compose window
   let pixelPrepared = false;
