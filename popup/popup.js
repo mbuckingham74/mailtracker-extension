@@ -4,18 +4,43 @@ const enabledCheckbox = document.getElementById('enabled');
 const showNotificationCheckbox = document.getElementById('showNotification');
 const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
+const openPollStatusEl = document.getElementById('openPollStatus');
+const lastOpenPollAtEl = document.getElementById('lastOpenPollAt');
+const lastOpenPollNewCountEl = document.getElementById('lastOpenPollNewCount');
+const lastOpenSummaryEl = document.getElementById('lastOpenSummary');
+const lastOpenPollErrorRowEl = document.getElementById('lastOpenPollErrorRow');
+const lastOpenPollErrorEl = document.getElementById('lastOpenPollError');
+
+const POLL_ACTIVITY_KEYS = [
+  'lastOpenPollAt',
+  'openPollStatus',
+  'lastOpenPollError',
+  'lastOpenPollNewCount',
+  'lastOpenSummary'
+];
+const DEFAULT_POLL_ACTIVITY = {
+  lastOpenPollAt: null,
+  openPollStatus: 'paused',
+  lastOpenPollError: '',
+  lastOpenPollNewCount: 0,
+  lastOpenSummary: null
+};
 
 // Load saved settings
 async function loadSettings() {
-  const settings = await chrome.storage.sync.get({
-    apiKey: '',
-    enabled: true,
-    showNotification: true
-  });
+  const [settings, activity] = await Promise.all([
+    chrome.storage.sync.get({
+      apiKey: '',
+      enabled: true,
+      showNotification: true
+    }),
+    chrome.storage.local.get(DEFAULT_POLL_ACTIVITY)
+  ]);
 
   apiKeyInput.value = settings.apiKey;
   enabledCheckbox.checked = settings.enabled;
   showNotificationCheckbox.checked = settings.showNotification;
+  updateActivity(activity);
 
   // Check API connection
   if (settings.apiKey) {
@@ -23,6 +48,53 @@ async function loadSettings() {
   } else {
     updateStatus('No API key set', 'error');
   }
+}
+
+async function loadActivity() {
+  const activity = await chrome.storage.local.get(DEFAULT_POLL_ACTIVITY);
+  updateActivity(activity);
+}
+
+function formatTimestamp(timestampSeconds) {
+  if (!timestampSeconds) {
+    return 'Never';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(new Date(timestampSeconds * 1000));
+}
+
+function formatPollStatus(status) {
+  if (status === 'ok') {
+    return 'Active';
+  }
+
+  if (status === 'error') {
+    return 'Error';
+  }
+
+  return 'Paused';
+}
+
+function formatOpenSummary(summary) {
+  if (!summary) {
+    return 'No recent opens';
+  }
+
+  return `${summary.recipient} opened "${summary.subject}" from ${summary.location}`;
+}
+
+function updateActivity(activity) {
+  openPollStatusEl.textContent = formatPollStatus(activity.openPollStatus);
+  lastOpenPollAtEl.textContent = formatTimestamp(activity.lastOpenPollAt);
+  lastOpenPollNewCountEl.textContent = String(activity.lastOpenPollNewCount ?? 0);
+  lastOpenSummaryEl.textContent = formatOpenSummary(activity.lastOpenSummary);
+
+  const hasError = Boolean(activity.lastOpenPollError);
+  lastOpenPollErrorRowEl.hidden = !hasError;
+  lastOpenPollErrorEl.textContent = hasError ? activity.lastOpenPollError : 'None';
 }
 
 // Save settings
@@ -83,6 +155,17 @@ function updateStatus(text, state) {
 
 // Event listeners
 saveBtn.addEventListener('click', saveSettings);
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') {
+    return;
+  }
+
+  if (!POLL_ACTIVITY_KEYS.some((key) => changes[key])) {
+    return;
+  }
+
+  loadActivity();
+});
 
 // Load settings on popup open
 loadSettings();

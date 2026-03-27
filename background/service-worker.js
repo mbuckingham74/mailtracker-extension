@@ -13,6 +13,7 @@ const OPEN_NOTIFICATION_PREFIX = 'open-';
 
 const {
   getOpenIdentity,
+  getOpenTimestamp,
   getLatestOpenTimestamp
 } = globalThis.mailtrackOpenHelpers;
 
@@ -26,6 +27,27 @@ function ensurePollingAlarm() {
 
 function trimRecentOpenIds(openIds) {
   return openIds.slice(-MAX_NOTIFIED_OPEN_IDS);
+}
+
+function buildOpenSummary(open) {
+  const location = [open?.city, open?.country].filter(Boolean).join(', ') || 'Unknown location';
+
+  return {
+    recipient: open?.recipient || 'Someone',
+    subject: open?.subject || '(no subject)',
+    location
+  };
+}
+
+function pickLatestOpen(left, right) {
+  if (!left) {
+    return right;
+  }
+
+  const leftTimestamp = getOpenTimestamp(left) ?? 0;
+  const rightTimestamp = getOpenTimestamp(right) ?? 0;
+
+  return rightTimestamp >= leftTimestamp ? right : left;
 }
 
 async function bumpOpenPollWatermark(timestamp = Date.now() / 1000) {
@@ -79,6 +101,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // Check for new opens and show notifications
 async function checkForNewOpens() {
+  const pollStartedAt = Date.now() / 1000;
   const settings = await chrome.storage.sync.get({
     apiKey: '',
     enabled: true,
@@ -86,11 +109,16 @@ async function checkForNewOpens() {
   });
 
   if (!settings.apiKey || !settings.enabled || !settings.showNotification) {
-    await bumpOpenPollWatermark();
+    await chrome.storage.local.set({
+      lastOpenPollAt: pollStartedAt,
+      openPollStatus: 'paused',
+      lastOpenPollError: '',
+      lastOpenPollNewCount: 0
+    });
+    await bumpOpenPollWatermark(pollStartedAt);
     return;
   }
 
-  const pollStartedAt = Date.now() / 1000;
   const { lastOpenCheck, notifiedOpenIds = [] } = await chrome.storage.local.get([
     'lastOpenCheck',
     'notifiedOpenIds'
@@ -107,11 +135,19 @@ async function checkForNewOpens() {
 
     if (!response.ok) {
       console.error('Failed to check opens:', response.status);
+      await chrome.storage.local.set({
+        lastOpenPollAt: pollStartedAt,
+        openPollStatus: 'error',
+        lastOpenPollError: `HTTP ${response.status}`,
+        lastOpenPollNewCount: 0
+      });
       return;
     }
 
     const opens = await response.json();
     const seenOpenKeys = new Set(notifiedOpenIds);
+    let latestNotifiedOpen = null;
+    let newOpenCount = 0;
 
     const latestOpenTimestamp = getLatestOpenTimestamp(opens, watermark);
     const nextOpenCheck = latestOpenTimestamp > watermark
@@ -125,6 +161,8 @@ async function checkForNewOpens() {
         continue;
       }
       seenOpenKeys.add(dedupeKey);
+      latestNotifiedOpen = pickLatestOpen(latestNotifiedOpen, open);
+      newOpenCount += 1;
 
       const location = [open.city, open.country].filter(Boolean).join(', ') || 'Unknown location';
 
@@ -140,13 +178,30 @@ async function checkForNewOpens() {
 
     // Prefer the newest returned open time; if the payload does not expose a
     // parseable timestamp, fall back to poll start plus a small overlap window.
+    const pollStateUpdate = {
+      lastOpenPollAt: pollStartedAt,
+      openPollStatus: 'ok',
+      lastOpenPollError: '',
+      lastOpenPollNewCount: newOpenCount
+    };
+    if (latestNotifiedOpen) {
+      pollStateUpdate.lastOpenSummary = buildOpenSummary(latestNotifiedOpen);
+    }
+
     await chrome.storage.local.set({
       lastOpenCheck: nextOpenCheck,
-      notifiedOpenIds: trimRecentOpenIds(Array.from(seenOpenKeys))
+      notifiedOpenIds: trimRecentOpenIds(Array.from(seenOpenKeys)),
+      ...pollStateUpdate
     });
 
   } catch (error) {
     console.error('Error checking for opens:', error);
+    await chrome.storage.local.set({
+      lastOpenPollAt: pollStartedAt,
+      openPollStatus: 'error',
+      lastOpenPollError: error.message || 'Unknown error',
+      lastOpenPollNewCount: 0
+    });
   }
 }
 

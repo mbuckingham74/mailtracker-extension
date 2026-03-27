@@ -13,6 +13,19 @@ const pendingPixels = new Map();
 
 // Track if XHR interceptor is ready
 let xhrInterceptorReady = false;
+const MAILTRACK_DEBUG = window.localStorage.getItem('mailtrackDebug') === 'true';
+
+function debugLog(...args) {
+  if (MAILTRACK_DEBUG) {
+    console.log(...args);
+  }
+}
+
+function debugWarn(...args) {
+  if (MAILTRACK_DEBUG) {
+    console.warn(...args);
+  }
+}
 
 function findComposeWindow(element) {
   return element?.closest('[role="dialog"], .nH.Hd, form') ||
@@ -41,7 +54,7 @@ function updateInterceptorBadges() {
 
 // Listen for XHR interceptor ready signal
 window.addEventListener('mailtrack-interceptor-ready', function() {
-  console.log('Mailtrack: XHR interceptor confirmed ready via event');
+  debugLog('Mailtrack: XHR interceptor confirmed ready via event');
   xhrInterceptorReady = true;
   updateInterceptorBadges();
 });
@@ -68,7 +81,7 @@ function generateUUID() {
 function injectXHRInterceptor() {
   // Check if already injected
   if (document.getElementById('mailtrack-xhr-interceptor')) {
-    console.log('Mailtrack: XHR interceptor already injected');
+    debugLog('Mailtrack: XHR interceptor already injected');
     return;
   }
 
@@ -76,13 +89,13 @@ function injectXHRInterceptor() {
   script.id = 'mailtrack-xhr-interceptor';
   script.src = chrome.runtime.getURL('content/xhr-interceptor.js');
   script.onload = function() {
-    console.log('Mailtrack: XHR interceptor script loaded');
+    debugLog('Mailtrack: XHR interceptor script loaded');
   };
   script.onerror = function(e) {
     console.error('Mailtrack: Failed to load XHR interceptor', e);
   };
   (document.head || document.documentElement).appendChild(script);
-  console.log('Mailtrack: Injecting XHR interceptor into page context');
+  debugLog('Mailtrack: Injecting XHR interceptor into page context');
 }
 
 // Send pixel data to the XHR interceptor in page context
@@ -91,7 +104,7 @@ function sendPixelToInterceptor(pixelUrl, recipient, subject, messageId) {
   window.dispatchEvent(new CustomEvent('mailtrack-inject-pixel', {
     detail: { pixelUrl, recipient, subject, messageId }
   }));
-  console.log('Mailtrack: Sent pixel to XHR interceptor:', messageId);
+  debugLog('Mailtrack: Sent pixel to XHR interceptor:', messageId);
 }
 
 function clearPendingPixel(messageId, { notifyInterceptor = true, keepWaiting = false } = {}) {
@@ -109,7 +122,7 @@ async function createTrackingPixel(recipient, subject, messageGroupId) {
   const settings = await getSettings();
 
   if (!settings.apiKey) {
-    console.log('Mailtrack: No API key configured');
+    debugLog('Mailtrack: No API key configured');
     return null;
   }
 
@@ -130,7 +143,7 @@ async function createTrackingPixel(recipient, subject, messageGroupId) {
       return null;
     }
 
-    console.log('Mailtrack: Created tracking pixel', response.id);
+    debugLog('Mailtrack: Created tracking pixel', response.id);
     return response;
   } catch (error) {
     console.error('Mailtrack: API error', error);
@@ -143,30 +156,30 @@ function extractRecipients(composeWindow) {
   const recipients = new Set();
 
   const allEmailElements = composeWindow.querySelectorAll('[email]');
-  console.log('Mailtrack: Found', allEmailElements.length, 'elements with [email] attribute');
+  debugLog('Mailtrack: Found', allEmailElements.length, 'elements with [email] attribute');
 
   allEmailElements.forEach(el => {
     const email = el.getAttribute('email');
     if (!email || !email.includes('@')) return;
 
-    console.log('Mailtrack: Checking email:', email);
-    console.log('  - tagName:', el.tagName);
-    console.log('  - className:', el.className);
-    console.log('  - has data-name:', el.hasAttribute('data-name'));
-    console.log('  - in listbox:', !!el.closest('[role="listbox"]'));
+    debugLog('Mailtrack: Checking email:', email);
+    debugLog('  - tagName:', el.tagName);
+    debugLog('  - className:', el.className);
+    debugLog('  - has data-name:', el.hasAttribute('data-name'));
+    debugLog('  - in listbox:', !!el.closest('[role="listbox"]'));
 
     // ONLY exclude if inside a listbox (suggestions dropdown)
     if (el.closest('[role="listbox"]')) {
-      console.log('Mailtrack: Skipping (in suggestion listbox):', email);
+      debugLog('Mailtrack: Skipping (in suggestion listbox):', email);
       return;
     }
 
-    console.log('Mailtrack: Accepting recipient:', email);
+    debugLog('Mailtrack: Accepting recipient:', email);
     recipients.add(email);
   });
 
   const result = [...recipients];
-  console.log('Mailtrack: Total recipients found:', result);
+  debugLog('Mailtrack: Total recipients found:', result);
   return result;
 }
 
@@ -193,7 +206,7 @@ function getComposeDetails(composeWindow) {
 async function prepareTrackingPixel(composeBody, composeWindow, composeDetails = getComposeDetails(composeWindow)) {
   const { recipient, subject, signature } = composeDetails;
 
-  console.log('Mailtrack: Extracted recipient:', recipient, 'subject:', subject);
+  debugLog('Mailtrack: Extracted recipient:', recipient, 'subject:', subject);
 
   // Create a single tracking pixel for this email
   const messageGroupId = generateUUID();
@@ -204,7 +217,7 @@ async function prepareTrackingPixel(composeBody, composeWindow, composeDetails =
     return null;
   }
 
-  console.log('Mailtrack: Prepared pixel for XHR injection:', track.id);
+  debugLog('Mailtrack: Prepared pixel for XHR injection:', track.id);
 
   // Store the pixel data and send to XHR interceptor
   const messageId = messageGroupId;
@@ -232,7 +245,7 @@ function injectPixelIntoDom(composeBody, pixelUrl) {
     img.width = 1;
     img.height = 1;
     img.style.display = 'none';
-    console.log('Mailtrack: Pixel injected into DOM');
+    debugLog('Mailtrack: Pixel injected into DOM');
   } catch (e) {
     console.error('Mailtrack: DOM injection failed:', e);
   }
@@ -274,12 +287,12 @@ async function processComposeBody(composeBody) {
 
   const settings = await getSettings();
   if (!settings.enabled || !settings.apiKey) {
-    console.log('Mailtrack: Disabled or no API key');
+    debugLog('Mailtrack: Disabled or no API key');
     return;
   }
 
   processedComposeWindows.add(composeBody);
-  console.log('Mailtrack: Found compose window');
+  debugLog('Mailtrack: Found compose window');
 
   // Find the parent compose window/dialog
   const composeWindow = findComposeWindow(composeBody);
@@ -300,11 +313,11 @@ async function processComposeBody(composeBody) {
 
     if (needsNewTrack) {
       if (currentTrack?.messageId) {
-        console.log('Mailtrack: Recipient or subject changed, refreshing tracking pixel');
+        debugLog('Mailtrack: Recipient or subject changed, refreshing tracking pixel');
         clearPendingPixel(currentTrack.messageId, { keepWaiting: true });
       }
 
-      console.log('Mailtrack: Preparing pixel for:', composeDetails.recipient, composeDetails.subject);
+      debugLog('Mailtrack: Preparing pixel for:', composeDetails.recipient, composeDetails.subject);
       currentTrack = await prepareTrackingPixel(composeBody, composeWindow, composeDetails);
       if (composeDisposed && currentTrack?.messageId) {
         clearPendingPixel(currentTrack.messageId);
@@ -312,7 +325,7 @@ async function processComposeBody(composeBody) {
         return null;
       }
       if (currentTrack) {
-        console.log('Mailtrack: Pixel prepared and sent to XHR interceptor:', currentTrack.id);
+        debugLog('Mailtrack: Pixel prepared and sent to XHR interceptor:', currentTrack.id);
       }
     } else if (currentTrack) {
       sendPixelToInterceptor(
@@ -334,20 +347,20 @@ async function processComposeBody(composeBody) {
 
     if (sendButton && !sendButton.dataset.mailtrackIntercepted) {
       sendButton.dataset.mailtrackIntercepted = 'true';
-      console.log('Mailtrack: Intercepting send button');
+      debugLog('Mailtrack: Intercepting send button');
 
       // Only show "Tracking" badge if XHR interceptor is confirmed ready
       // Check both the event-based flag AND the global variable (in case event fired before listener)
       if (checkInterceptorReady()) {
         showInsertedBadge(composeWindow, true);
       } else {
-        console.warn('Mailtrack: XHR interceptor not ready, badge will show error');
+        debugWarn('Mailtrack: XHR interceptor not ready, badge will show error');
         showInsertedBadge(composeWindow, false);
       }
 
       // Intercept mousedown (before click) - inject pixel into DOM + signal XHR interceptor
       sendButton.addEventListener('mousedown', async (e) => {
-        console.log('Mailtrack: Send button clicked, preparing pixel...');
+        debugLog('Mailtrack: Send button clicked, preparing pixel...');
 
         // IMMEDIATELY signal XHR interceptor to wait for pixel (backup method)
         window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
@@ -360,7 +373,7 @@ async function processComposeBody(composeBody) {
           injectPixelIntoDom(composeBody, currentTrack.pixel_url);
         }
 
-        console.log('Mailtrack: Pixel ready (DOM + XHR backup)');
+        debugLog('Mailtrack: Pixel ready (DOM + XHR backup)');
       }, { capture: true });
     }
   };
@@ -368,7 +381,7 @@ async function processComposeBody(composeBody) {
   // Intercept keyboard send (Ctrl+Enter / Cmd+Enter)
   const handleKeyboardSend = async (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      console.log('Mailtrack: Keyboard send detected (Ctrl/Cmd+Enter)');
+      debugLog('Mailtrack: Keyboard send detected (Ctrl/Cmd+Enter)');
 
       window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
 
@@ -427,7 +440,7 @@ async function processComposeBody(composeBody) {
 
 // Main observer for compose windows
 function observeComposeWindows() {
-  console.log('Mailtrack: Starting compose window observer');
+  debugLog('Mailtrack: Starting compose window observer');
 
   const observer = new MutationObserver(() => {
     // Look for contenteditable divs which are compose bodies
@@ -461,13 +474,13 @@ function observeComposeWindows() {
 // Listen for pixel injection confirmation from page context
 window.addEventListener('mailtrack-pixel-injected', function(e) {
   const { messageId, success } = e.detail;
-  console.log('Mailtrack: Received injection confirmation:', messageId, success);
+  debugLog('Mailtrack: Received injection confirmation:', messageId, success);
   clearPendingPixel(messageId, { notifyInterceptor: false });
 });
 
 // Initialize
-console.log('Mailtrack: Content script loaded at', new Date().toISOString());
-console.log('Mailtrack: Document readyState:', document.readyState);
+debugLog('Mailtrack: Content script loaded at', new Date().toISOString());
+debugLog('Mailtrack: Document readyState:', document.readyState);
 
 // Inject XHR interceptor immediately
 injectXHRInterceptor();
@@ -475,10 +488,10 @@ injectXHRInterceptor();
 // Start observing when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    console.log('Mailtrack: DOMContentLoaded fired');
+    debugLog('Mailtrack: DOMContentLoaded fired');
     observeComposeWindows();
   });
 } else {
-  console.log('Mailtrack: DOM already ready, starting observer');
+  debugLog('Mailtrack: DOM already ready, starting observer');
   observeComposeWindows();
 }

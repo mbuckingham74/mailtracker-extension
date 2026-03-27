@@ -129,6 +129,46 @@ input[type="text"]:focus {
   color: #333;
 }
 
+.activity-card {
+  background: white;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.activity-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.activity-row + .activity-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.activity-label {
+  color: #666;
+  flex: 0 0 auto;
+}
+
+.activity-value {
+  color: #2c3e50;
+  text-align: right;
+  min-width: 0;
+}
+
+.activity-wrap {
+  max-width: 150px;
+  white-space: normal;
+}
+
+.activity-error {
+  color: #c0392b;
+}
+
 .btn-primary {
   width: 100%;
   padding: 10px;

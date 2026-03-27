@@ -34,6 +34,31 @@
       </label>
     </div>
 
+    <div class="section">
+      <div class="activity-card">
+        <div class="activity-row">
+          <span class="activity-label">Polling</span>
+          <span class="activity-value" id="openPollStatus">Checking...</span>
+        </div>
+        <div class="activity-row">
+          <span class="activity-label">Last poll</span>
+          <span class="activity-value" id="lastOpenPollAt">Never</span>
+        </div>
+        <div class="activity-row">
+          <span class="activity-label">New opens</span>
+          <span class="activity-value" id="lastOpenPollNewCount">0</span>
+        </div>
+        <div class="activity-row">
+          <span class="activity-label">Recent open</span>
+          <span class="activity-value activity-wrap" id="lastOpenSummary">No recent opens</span>
+        </div>
+        <div class="activity-row" id="lastOpenPollErrorRow" hidden>
+          <span class="activity-label">Last error</span>
+          <span class="activity-value activity-wrap activity-error" id="lastOpenPollError">None</span>
+        </div>
+      </div>
+    </div>
+
     <button id="saveBtn" class="btn-primary">Save Settings</button>
 
     <div class="footer">
