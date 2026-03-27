@@ -5,6 +5,7 @@ const POLL_INTERVAL_MINUTES = 2;
 const ALARM_NAME = 'checkOpens';
 const OPEN_CHECK_OVERLAP_SECONDS = 30;
 const MAX_NOTIFIED_OPEN_IDS = 500;
+const OPEN_TIMESTAMP_FIELDS = ['opened_at', 'open_time', 'timestamp', 'created_at', 'time'];
 
 function normalizeOpenTimestamp(value) {
   if (value === null || value === undefined || value === '') {
@@ -24,15 +25,81 @@ function normalizeOpenTimestamp(value) {
   return parsedValue / 1000;
 }
 
-function getLatestOpenTimestamp(opens, since) {
-  const timestampFields = ['opened_at', 'open_time', 'timestamp', 'created_at', 'time'];
+function ensurePollingAlarm() {
+  chrome.alarms.get(ALARM_NAME, (alarm) => {
+    if (!alarm || alarm.periodInMinutes !== POLL_INTERVAL_MINUTES) {
+      chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_INTERVAL_MINUTES });
+    }
+  });
+}
 
+function hashString(value) {
+  let hash = 2166136261;
+
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(16);
+}
+
+function getOpenTimestamp(open) {
+  for (const field of OPEN_TIMESTAMP_FIELDS) {
+    const parsedTimestamp = normalizeOpenTimestamp(open?.[field]);
+    if (parsedTimestamp !== null) {
+      return parsedTimestamp;
+    }
+  }
+
+  return null;
+}
+
+function getFallbackOpenFingerprint(open) {
+  const fingerprintEntries = Object.entries(open || {})
+    .filter(([field, value]) => (
+      field !== 'open_id' &&
+      !OPEN_TIMESTAMP_FIELDS.includes(field) &&
+      value !== undefined &&
+      value !== null &&
+      value !== ''
+    ))
+    .map(([field, value]) => [field, String(value)]);
+  const timestamp = getOpenTimestamp(open);
+
+  if (timestamp !== null) {
+    fingerprintEntries.push(['normalized_timestamp', String(timestamp)]);
+  }
+
+  fingerprintEntries.sort(([left], [right]) => left.localeCompare(right));
+
+  return hashString(
+    fingerprintEntries.map(([field, value]) => `${field}:${value}`).join('|') || 'unknown-open'
+  );
+}
+
+function getOpenIdentity(open) {
+  const openId = open?.open_id;
+  if (openId !== undefined && openId !== null && openId !== '') {
+    const key = String(openId);
+    return {
+      dedupeKey: key,
+      notificationId: `open-${key}`
+    };
+  }
+
+  const fingerprint = getFallbackOpenFingerprint(open);
+  return {
+    dedupeKey: `fingerprint:${fingerprint}`,
+    notificationId: `open-fallback-${fingerprint}`
+  };
+}
+
+function getLatestOpenTimestamp(opens, since) {
   return opens.reduce((latest, open) => {
-    for (const field of timestampFields) {
-      const parsedTimestamp = normalizeOpenTimestamp(open?.[field]);
-      if (parsedTimestamp !== null) {
-        return Math.max(latest, parsedTimestamp);
-      }
+    const openTimestamp = getOpenTimestamp(open);
+    if (openTimestamp !== null) {
+      return Math.max(latest, openTimestamp);
     }
 
     return latest;
@@ -42,6 +109,8 @@ function getLatestOpenTimestamp(opens, since) {
 function trimRecentOpenIds(openIds) {
   return openIds.slice(-MAX_NOTIFIED_OPEN_IDS);
 }
+
+ensurePollingAlarm();
 
 // Listen for installation
 chrome.runtime.onInstalled.addListener((details) => {
@@ -59,8 +128,11 @@ chrome.runtime.onInstalled.addListener((details) => {
     chrome.storage.local.set({ lastOpenCheck: Date.now() / 1000 });
   }
 
-  // Set up polling alarm
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_INTERVAL_MINUTES });
+  ensurePollingAlarm();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensurePollingAlarm();
 });
 
 // Handle alarm for polling
@@ -99,7 +171,7 @@ async function checkForNewOpens() {
     }
 
     const opens = await response.json();
-    const seenOpenIds = new Set(notifiedOpenIds);
+    const seenOpenKeys = new Set(notifiedOpenIds);
 
     const latestOpenTimestamp = getLatestOpenTimestamp(opens, watermark);
     const nextOpenCheck = latestOpenTimestamp > watermark
@@ -108,18 +180,15 @@ async function checkForNewOpens() {
 
     // Show notification for each new open, suppressing overlap duplicates.
     for (const open of opens) {
-      const openId = open?.open_id;
-      if (openId !== undefined && openId !== null) {
-        const openIdKey = String(openId);
-        if (seenOpenIds.has(openIdKey)) {
-          continue;
-        }
-        seenOpenIds.add(openIdKey);
+      const { dedupeKey, notificationId } = getOpenIdentity(open);
+      if (seenOpenKeys.has(dedupeKey)) {
+        continue;
       }
+      seenOpenKeys.add(dedupeKey);
 
       const location = [open.city, open.country].filter(Boolean).join(', ') || 'Unknown location';
 
-      chrome.notifications.create(`open-${open.open_id}`, {
+      chrome.notifications.create(notificationId, {
         type: 'basic',
         iconUrl: chrome.runtime.getURL('icons/icon128.png'),
         title: 'Email Opened!',
@@ -132,7 +201,7 @@ async function checkForNewOpens() {
     // parseable timestamp, fall back to poll start plus a small overlap window.
     await chrome.storage.local.set({
       lastOpenCheck: nextOpenCheck,
-      notifiedOpenIds: trimRecentOpenIds(Array.from(seenOpenIds))
+      notifiedOpenIds: trimRecentOpenIds(Array.from(seenOpenKeys))
     });
 
   } catch (error) {

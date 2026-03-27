@@ -1,6 +1,3 @@
-// Mailtrack API configuration
-const API_BASE = 'https://mailtrack.tachyonfuture.com';
-
 // DOM elements
 const apiKeyInput = document.getElementById('apiKey');
 const enabledCheckbox = document.getElementById('enabled');
@@ -22,7 +19,7 @@ async function loadSettings() {
 
   // Check API connection
   if (settings.apiKey) {
-    checkConnection(settings.apiKey);
+    checkConnection();
   } else {
     updateStatus('No API key set', 'error');
   }
@@ -48,28 +45,30 @@ async function saveSettings() {
 
   // Check connection with new API key
   if (settings.apiKey) {
-    checkConnection(settings.apiKey);
+    checkConnection();
+  } else {
+    updateStatus('No API key set', 'error');
   }
 }
 
 // Check API connection
-async function checkConnection(apiKey) {
+async function checkConnection() {
   updateStatus('Checking...', '');
 
   try {
-    const response = await fetch(`${API_BASE}/api/stats`, {
-      headers: {
-        'X-API-Key': apiKey
-      }
-    });
+    const response = await chrome.runtime.sendMessage({ type: 'CHECK_CONNECTION' });
 
-    if (response.ok) {
-      const stats = await response.json();
-      updateStatus(`Connected (${stats.total_tracks} tracks)`, 'connected');
-    } else if (response.status === 401) {
+    if (response?.connected) {
+      const stats = response.stats || {};
+      updateStatus(`Connected (${stats.total_tracks ?? 0} tracks)`, 'connected');
+    } else if (response?.error === 'HTTP 401') {
       updateStatus('Invalid API key', 'error');
-    } else {
+    } else if (response?.error === 'No API key') {
+      updateStatus('No API key set', 'error');
+    } else if (response?.error?.startsWith('HTTP ')) {
       updateStatus('Connection error', 'error');
+    } else {
+      updateStatus('Cannot reach server', 'error');
     }
   } catch (error) {
     updateStatus('Cannot reach server', 'error');
