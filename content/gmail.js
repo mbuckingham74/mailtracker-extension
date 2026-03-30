@@ -14,6 +14,7 @@ const pendingPixels = new Map();
 // Track if XHR interceptor is ready
 let xhrInterceptorReady = false;
 const MAILTRACK_DEBUG = window.localStorage.getItem('mailtrackDebug') === 'true';
+const SEND_TEARDOWN_GRACE_MS = 15000;
 
 function debugLog(...args) {
   if (MAILTRACK_DEBUG) {
@@ -25,6 +26,10 @@ function debugWarn(...args) {
   if (MAILTRACK_DEBUG) {
     console.warn(...args);
   }
+}
+
+function shouldPreservePendingPixelOnDispose(lastSendAttemptAt) {
+  return lastSendAttemptAt > 0 && (Date.now() - lastSendAttemptAt) < SEND_TEARDOWN_GRACE_MS;
 }
 
 function findComposeWindow(element) {
@@ -301,6 +306,7 @@ async function processComposeBody(composeBody) {
   let composeDisposed = false;
   let buttonObserver = null;
   let composeLifecycleObserver = null;
+  let lastSendAttemptAt = 0;
 
   // Function to prepare/update pixel with current recipient/subject
   const preparePixelNow = async () => {
@@ -320,7 +326,12 @@ async function processComposeBody(composeBody) {
       debugLog('Mailtrack: Preparing pixel for:', composeDetails.recipient, composeDetails.subject);
       currentTrack = await prepareTrackingPixel(composeBody, composeWindow, composeDetails);
       if (composeDisposed && currentTrack?.messageId) {
-        clearPendingPixel(currentTrack.messageId);
+        if (shouldPreservePendingPixelOnDispose(lastSendAttemptAt)) {
+          debugLog('Mailtrack: Compose closed after send attempt, preserving interceptor pixel state');
+          clearPendingPixel(currentTrack.messageId, { notifyInterceptor: false });
+        } else {
+          clearPendingPixel(currentTrack.messageId);
+        }
         currentTrack = null;
         return null;
       }
@@ -361,6 +372,7 @@ async function processComposeBody(composeBody) {
       // Intercept mousedown (before click) - inject pixel into DOM + signal XHR interceptor
       sendButton.addEventListener('mousedown', async (e) => {
         debugLog('Mailtrack: Send button clicked, preparing pixel...');
+        lastSendAttemptAt = Date.now();
 
         // IMMEDIATELY signal XHR interceptor to wait for pixel (backup method)
         window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
@@ -369,7 +381,7 @@ async function processComposeBody(composeBody) {
         await preparePixelNow();
 
         // PRIMARY: Inject pixel directly into compose body DOM
-        if (currentTrack) {
+        if (currentTrack && composeBody.isConnected) {
           injectPixelIntoDom(composeBody, currentTrack.pixel_url);
         }
 
@@ -382,12 +394,13 @@ async function processComposeBody(composeBody) {
   const handleKeyboardSend = async (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       debugLog('Mailtrack: Keyboard send detected (Ctrl/Cmd+Enter)');
+      lastSendAttemptAt = Date.now();
 
       window.dispatchEvent(new CustomEvent('mailtrack-prepare-send'));
 
       await preparePixelNow();
 
-      if (currentTrack) {
+      if (currentTrack && composeBody.isConnected) {
         injectPixelIntoDom(composeBody, currentTrack.pixel_url);
       }
     }
@@ -401,7 +414,12 @@ async function processComposeBody(composeBody) {
     composeDisposed = true;
 
     if (currentTrack?.messageId) {
-      clearPendingPixel(currentTrack.messageId);
+      if (shouldPreservePendingPixelOnDispose(lastSendAttemptAt)) {
+        debugLog('Mailtrack: Compose teardown happened right after send, leaving interceptor state intact');
+        clearPendingPixel(currentTrack.messageId, { notifyInterceptor: false });
+      } else {
+        clearPendingPixel(currentTrack.messageId);
+      }
     }
 
     composeBody.removeEventListener('keydown', handleKeyboardSend, true);
